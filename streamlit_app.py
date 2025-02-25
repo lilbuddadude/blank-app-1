@@ -25,8 +25,8 @@ load_dotenv()
 class EnhancedOptionsArbitrageScanner:
     def __init__(self):
         # Schwab API credentials
-        self.api_key = os.getenv("SCHWAB_API_KEY")
-        self.api_secret = os.getenv("SCHWAB_API_SECRET")
+        self.api_key = os.getenv("Vtbsc861GI48iT3JgAr8bp5Hvy5cVe7O")
+        self.api_secret = os.getenv("SvMJwXrepRDQBiXr")
         self.base_url = "https://api.schwab.com/trader/v1"  # Example URL
         self.session = self._create_session()
         self.rate_limit_delay = 0.2  # 200ms delay between API calls to avoid rate limiting
