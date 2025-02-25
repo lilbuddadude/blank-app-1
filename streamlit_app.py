@@ -541,7 +541,7 @@ if 'scan_results' in st.session_state and st.session_state.scan_results is not N
         display_data = results[display_columns].copy()
         
         # Apply custom CSS for table styling and colored cells
-       st.markdown("""
+        st.markdown("""
         <style>
         table.dataframe {
             border-collapse: collapse;
