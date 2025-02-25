@@ -1,755 +1,363 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.express as px
-import pl
-import os
-import json
-import logging
-from dotenv import load_dotenv
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import requests
-
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
-# Load environment variables
-load_dotenv()
+from datetime import datetime, timedelta
+import time
 
 # Set page config
 st.set_page_config(
-    page_title="Options Arbitrage Scanner",
-    page_icon="💰",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_title="Options Scanner",
+    page_icon="📈",
+    layout="wide"
 )
 
-# Custom CSS styling
-st.markdown("""
-<style>
-    .metric-card {
-        background-color: #ffffff;
-        border-radius: 5px;
-        box-shadow: 0 2px 10px 0 rgba(0,0,0,0.1);
-        padding: 15px;
-        margin: 10px 0;
-    }
-    .metric-value {
-        font-size: 28px;
-        font-weight: bold;
-        color: #1E88E5;
-    }
-    .metric-label {
-        font-size: 14px;
-        color: #616161;
-    }
-    .highlight {
-        background-color: #e6f7ff;
-        padding: 15px;
-        border-radius: 5px;
-        border-left: 5px solid #1890ff;
-        margin: 10px 0;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# Options Scanner Class with Schwab API Integration
-class OptionsArbitrageScanner:
-    def __init__(self):
-        """Initialize the scanner with Schwab API credentials"""
-        # Load API credentials from environment variables or Streamlit secrets
-        self.api_key = os.getenv("SCHWAB_API_KEY") or st.secrets.get("SCHWAB_API_KEY", "")
-        self.api_secret = os.getenv("SCHWAB_API_SECRET") or st.secrets.get("SCHWAB_API_SECRET", "")
-        self.base_url = os.getenv("SCHWAB_API_BASE_URL") or st.secrets.get("SCHWAB_API_BASE_URL", "https://api.schwab.com/trader/v1")
-        
-        # Check if credentials are available
-        if not self.api_key or not self.api_secret:
-            st.warning("Schwab API credentials not found. Please configure them in settings.")
-            logger.warning("API credentials not found")
-            self.api_configured = False
-        else:
-            self.api_configured = True
-            self.session = self._create_session()
-            logger.info("API session created successfully")
-        
-        # Cache for API responses
-        self.cache = {
-            'options_chains': {},
-            'stock_quotes': {},
-            'symbols_list': None
-        }
-        
-        # Cache timestamps
-        self.cache_timestamps = {
-            'options_chains': {},
-            'stock_quotes': {},
-            'symbols_list': None
-        }
-        
-        # Cache expiry times (in seconds)
-        self.cache_expiry = {
-            'options_chains': 300,  # 5 minutes
-            'stock_quotes': 60,     # 1 minute 
-            'symbols_list': 3600    # 1 hour
-        }
-        
-        # API rate limit settings
-        self.rate_limit_delay = 0.2  # 200ms delay between API calls
-        
-    def _create_session(self):
-        """Create an authenticated session with Schwab's API"""
-        session = requests.Session()
-        
-        # Add authentication headers
-        session.headers.update({
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json"
-        })
-        
-        # You may need to implement OAuth flow here depending on Schwab's requirements
-        # For example:
-        # token = self._get_oauth_token()
-        # session.headers.update({"Authorization": f"Bearer {token}"})
-        
-        return session
-    
-    def _is_cache_valid(self, cache_type, key=None):
-        """Check if a cache entry is still valid"""
-        if key:
-            if key not in self.cache_timestamps.get(cache_type, {}):
-                return False
-            timestamp = self.cache_timestamps[cache_type][key]
-        else:
-            if self.cache_timestamps[cache_type] is None:
-                return False
-            timestamp = self.cache_timestamps[cache_type]
-            
-        return (datetime.now() - timestamp).total_seconds() < self.cache_expiry[cache_type]
-    
-    def get_stock_data(self, symbols):
-        """Fetch current stock data for a list of symbols with caching"""
-        if not self.api_configured:
-            st.error("API not configured. Please add credentials in Settings.")
-            return None
-            
-        result = []
-        symbols_to_fetch = []
-        
-        # Check cache for each symbol
-        for symbol in symbols:
-            if symbol in self.cache['stock_quotes'] and self._is_cache_valid('stock_quotes', symbol):
-                result.append(self.cache['stock_quotes'][symbol])
-            else:
-                symbols_to_fetch.append(symbol)
-        
-        if not symbols_to_fetch:
-            return result
-        
-        # Fetch data for symbols not in cache
-        endpoint = f"{self.base_url}/markets/quotes"
-        try:
-            response = self.session.get(
-                endpoint, 
-                params={"symbols": ",".join(symbols_to_fetch)}
-            )
-            
-            if response.status_code == 200:
-                new_data = response.json()
-                
-                # Update cache with new data
-                for quote in new_data:
-                    symbol = quote['symbol']
-                    self.cache['stock_quotes'][symbol] = quote
-                    self.cache_timestamps['stock_quotes'][symbol] = datetime.now()
-                    result.append(quote)
-                    
-                return result
-            else:
-                logger.error(f"Error fetching stock data: {response.status_code} - {response.text}")
-                return None
-        except Exception as e:
-            logger.error(f"Exception fetching stock data: {str(e)}")
-            return None
-    
-    def get_option_chain(self, symbol, expiration_date=None):
-        """Fetch option chain data for a given symbol with caching"""
-        if not self.api_configured:
-            st.error("API not configured. Please add credentials in Settings.")
-            return None
-            
-        cache_key = f"{symbol}_{expiration_date}" if expiration_date else symbol
-        
-        # Check cache
-        if cache_key in self.cache['options_chains'] and self._is_cache_valid('options_chains', cache_key):
-            return self.cache['options_chains'][cache_key]
-        
-        # Fetch from API if not in cache
-        endpoint = f"{self.base_url}/markets/options/chains"
-        
-        params = {"symbol": symbol}
-        if expiration_date:
-            params["expirationDate"] = expiration_date
-            
-        try:
-            response = self.session.get(endpoint, params=params)
-            
-            if response.status_code == 200:
-                data = response.json()
-                
-                # Update cache
-                self.cache['options_chains'][cache_key] = data
-                self.cache_timestamps['options_chains'][cache_key] = datetime.now()
-                
-                return data
-            else:
-                logger.error(f"Error fetching option chain for {symbol}: {response.status_code} - {response.text}")
-                return None
-        except Exception as e:
-            logger.error(f"Exception fetching option chain for {symbol}: {str(e)}")
-            return None
-    
-    def get_all_optionable_stocks(self):
-        """Get a comprehensive list of all stocks with options available"""
-        if not self.api_configured:
-            st.error("API not configured. Please add credentials in Settings.")
-            return []
-            
-        # Check cache
-        if self.cache['symbols_list'] and self._is_cache_valid('symbols_list'):
-            return self.cache['symbols_list']
-        
-        # Fetch from Schwab API
-        endpoint = f"{self.base_url}/markets/options/symbols"
-        
-        try:
-            response = self.session.get(endpoint)
-            
-            if response.status_code == 200:
-                data = response.json()
-                symbols = [item['symbol'] for item in data]
-                
-                # Update cache
-                self.cache['symbols_list'] = symbols
-                self.cache_timestamps['symbols_list'] = datetime.now()
-                
-                return symbols
-            else:
-                logger.error(f"Error fetching optionable stocks: {response.status_code}")
-                return self._get_fallback_symbols_list()
-        except Exception as e:
-            logger.error(f"Exception fetching optionable stocks: {str(e)}")
-            return self._get_fallback_symbols_list()
-    
-    def _get_fallback_symbols_list(self):
-        """Provide a fallback list of optionable stocks if API fails"""
-        try:
-            # Example: read from a local CSV file
-            if os.path.exists('optionable_stocks.csv'):
-                df = pd.read_csv('optionable_stocks.csv')
-                return df['symbol'].tolist()
-            else:
-                # Return a default list of common optionable stocks
-                logger.warning("Using default symbol list - consider updating to a full list")
-                return [
-                    "AAPL", "MSFT", "AMZN", "GOOGL", "META", "TSLA", "NVDA", "AMD", 
-                    "INTC", "NFLX", "DIS", "BA", "JPM", "V", "MA", "PFE", "JNJ", 
-                    "WMT", "HD", "COST", "SBUX", "MCD", "KO", "PEP", "CSCO", "IBM",
-                    "ORCL", "CRM", "ADBE", "PYPL", "ROKU", "SQ", "SHOP", "ZM", "MRNA",
-                    "BNTX", "NKE", "LULU", "TGT", "AMC", "GME", "BB", "NOK", "F", "GM",
-                    "SPY", "QQQ", "IWM", "DIA"
-                ]
-        except Exception as e:
-            logger.error(f"Error in fallback symbol list: {str(e)}")
-            return []
-    
-    def find_covered_call_opportunities(self, min_return=0.05, max_days_to_expiry=45, 
-                                       safety_margin=0.01, symbols=None, max_symbols=None):
-        """
-        Find ITM covered call opportunities that offer immediate arbitrage
-        
-        Args:
-            min_return: Minimum annualized return (5% = 0.05)
-            max_days_to_expiry: Maximum days to expiration to consider
-            safety_margin: Additional margin added to stock price for safety
-            symbols: List of specific symbols to scan (None for all available)
-            max_symbols: Maximum number of symbols to process (None for all)
-        
-        Returns:
-            DataFrame of opportunities sorted by annualized return
-        """
-        if not self.api_configured:
-            st.error("API not configured. Please add credentials in Settings.")
-            return pd.DataFrame()
-            
-        with st.spinner("Scanning for covered call opportunities..."):
-            # Get symbols to scan
-            if symbols:
-                symbols_to_scan = symbols
-            else:
-                symbols_to_scan = self.get_all_optionable_stocks()
-                
-                if max_symbols and len(symbols_to_scan) > max_symbols:
-                    symbols_to_scan = symbols_to_scan[:max_symbols]
-            
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            status_text.text(f"Scanning {len(symbols_to_scan)} symbols for covered call opportunities")
-            
-            all_opportunities = []
-            
-            # Use parallel processing to scan multiple symbols
-            with ThreadPoolExecutor(max_workers=10) as executor:
-                future_to_symbol = {
-                    executor.submit(
-                        self._process_covered_call_for_symbol, 
-                        symbol, 
-                        min_return, 
-                        max_days_to_expiry,
-                        safety_margin
-                    ): symbol for symbol in symbols_to_scan
-                }
-                
-                completed = 0
-                for future in as_completed(future_to_symbol):
-                    symbol = future_to_symbol[future]
-                    completed += 1
-                    progress = completed / len(symbols_to_scan)
-                    progress_bar.progress(progress)
-                    status_text.text(f"Processing {symbol}... ({completed}/{len(symbols_to_scan)})")
-                    
-                    try:
-                        opportunities = future.result()
-                        if opportunities:
-                            all_opportunities.extend(opportunities)
-                            logger.info(f"Found {len(opportunities)} opportunities for {symbol}")
-                    except Exception as e:
-                        logger.error(f"Error processing {symbol}: {str(e)}")
-            
-            progress_bar.empty()
-            status_text.empty()
-            
-            logger.info(f"Total covered call opportunities found: {len(all_opportunities)}")
-            
-            # Convert to DataFrame and sort
-            if all_opportunities:
-                df = pd.DataFrame(all_opportunities)
-                return df.sort_values('annualized_return', ascending=False)
-            else:
-                return pd.DataFrame()
-    
-    def _process_covered_call_for_symbol(self, symbol, min_return=0.05, max_days_to_expiry=45, safety_margin=0.01):
-        """Process covered call opportunities for a single symbol"""
-        try:
-            # Get current stock price
-            stock_data = self.get_stock_data([symbol])
-            if not stock_data or len(stock_data) == 0:
-                return []
-                
-            current_price = stock_data[0].get('lastPrice')
-            if not current_price:
-                return []
-            
-            # Add a small delay to respect rate limits
-            time.sleep(self.rate_limit_delay)
-            
-            # Get option chains
-            option_data = self.get_option_chain(symbol)
-            if not option_data or 'expirationDates' not in option_data:
-                return []
-                
-            opportunities = []
-            
-            # Process expirations within our timeframe
-            for expiration in option_data['expirationDates']:
-                try:
-                    expiry_date = datetime.fromisoformat(expiration.replace('Z', '+00:00'))
-                    days_to_expiry = (expiry_date - datetime.now()).days
-                    
-                    if days_to_expiry > max_days_to_expiry or days_to_expiry <= 0:
-                        continue
-                        
-                    # Get calls for this expiration
-                    calls = [opt for opt in option_data.get('options', []) 
-                             if opt.get('optionType') == 'CALL' and 
-                             opt.get('expirationDate') == expiration]
-                    
-                    # Find ITM calls with sufficient volume and open interest
-                    for call in calls:
-                        strike = call.get('strikePrice')
-                        if not strike:
-                            continue
-                        
-                        # Only consider ITM options
-                        if strike >= current_price:
-                            continue
-                            
-                        # Check for sufficient liquidity
-                        volume = call.get('volume', 0)
-                        open_interest = call.get('openInterest', 0)
-                        bid_ask_spread = call.get('ask', 0) - call.get('bid', 0)
-                        
-                        # Skip options with low liquidity or wide spreads
-                        if volume < 10 or open_interest < 10 or bid_ask_spread > 0.10 * call.get('bid', 1):
-                            continue
-                            
-                        call_price = call.get('bid', 0)  # Use bid price to be conservative
-                        
-                        # Calculate potential arbitrage with safety margin
-                        cost_basis = current_price * (1 + safety_margin)  # Add safety margin to stock price
-                        immediate_credit = call_price
-                        assignment_value = strike
-                        
-                        # Check if there's an immediate arbitrage opportunity
-                        net_debit = cost_basis - immediate_credit
-                        if net_debit < assignment_value:
-                            profit = assignment_value - net_debit
-                            profit_percentage = profit / net_debit
-                            annualized_return = profit_percentage * (365 / days_to_expiry)
-                            
-                            if annualized_return >= min_return:
-                                # Calculate risk metrics
-                                downside_protection = (current_price - net_debit) / current_price
-                                max_loss = net_debit  # Theoretical max loss if stock goes to zero
-                                
-                                opportunities.append({
-                                    'symbol': symbol,
-                                    'stock_price': current_price,
-                                    'strike': strike,
-                                    'expiration_date': expiry_date.strftime('%Y-%m-%d'),
-                                    'days_to_expiry': days_to_expiry,
-                                    'call_price': call_price,
-                                    'bid_ask_spread': bid_ask_spread,
-                                    'volume': volume,
-                                    'open_interest': open_interest,
-                                    'net_debit': net_debit,
-                                    'profit': profit,
-                                    'return': profit_percentage,
-                                    'annualized_return': annualized_return,
-                                    'implied_volatility': call.get('impliedVolatility', 0),
-                                    'downside_protection': downside_protection,
-                                    'max_loss': max_loss,
-                                    'intrinsic_value': current_price - strike,
-                                    'time_value': call_price - (current_price - strike)
-                                })
-                except Exception as e:
-                    logger.error(f"Error processing expiration for {symbol}: {str(e)}")
-                    continue
-                    
-            return opportunities
-        except Exception as e:
-            logger.error(f"Error processing covered calls for {symbol}: {str(e)}")
-            return []
-    
-    def find_cash_secured_put_opportunities(self, min_return=0.05, max_days_to_expiry=45, 
-                                           min_otm_percentage=0.05, symbols=None, max_symbols=None):
-        """
-        Find profitable cash-secured put opportunities
-        
-        Args:
-            min_return: Minimum annualized return (5% = 0.05)
-            max_days_to_expiry: Maximum days to expiration to consider
-            min_otm_percentage: Minimum percentage OTM for puts to consider
-            symbols: List of specific symbols to scan (None for all available)
-            max_symbols: Maximum number of symbols to process (None for all)
-        
-        Returns:
-            DataFrame of opportunities sorted by annualized return
-        """
-        if not self.api_configured:
-            st.error("API not configured. Please add credentials in Settings.")
-            return pd.DataFrame()
-            
-        with st.spinner("Scanning for cash-secured put opportunities..."):
-            # Get symbols to scan
-            if symbols:
-                symbols_to_scan = symbols
-            else:
-                symbols_to_scan = self.get_all_optionable_stocks()
-                
-                if max_symbols and len(symbols_to_scan) > max_symbols:
-                    symbols_to_scan = symbols_to_scan[:max_symbols]
-            
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            status_text.text(f"Scanning {len(symbols_to_scan)} symbols for CSP opportunities")
-            
-            all_opportunities = []
-            
-            # Use parallel processing to scan multiple symbols
-            with ThreadPoolExecutor(max_workers=10) as executor:
-                future_to_symbol = {
-                    executor.submit(
-                        self._process_csp_for_symbol, 
-                        symbol, 
-                        min_return, 
-                        max_days_to_expiry,
-                        min_otm_percentage
-                    ): symbol for symbol in symbols_to_scan
-                }
-                
-                completed = 0
-                for future in as_completed(future_to_symbol):
-                    symbol = future_to_symbol[future]
-                    completed += 1
-                    progress = completed / len(symbols_to_scan)
-                    progress_bar.progress(progress)
-                    status_text.text(f"Processing {symbol}... ({completed}/{len(symbols_to_scan)})")
-                    
-                    try:
-                        opportunities = future.result()
-                        if opportunities:
-                            all_opportunities.extend(opportunities)
-                            logger.info(f"Found {len(opportunities)} opportunities for {symbol}")
-                    except Exception as e:
-                        logger.error(f"Error processing {symbol}: {str(e)}")
-            
-            progress_bar.empty()
-            status_text.empty()
-            
-            logger.info(f"Total CSP opportunities found: {len(all_opportunities)}")
-            
-            # Convert to DataFrame and sort
-            if all_opportunities:
-                df = pd.DataFrame(all_opportunities)
-                return df.sort_values('annualized_return', ascending=False)
-            else:
-                return pd.DataFrame()
-    
-    def _process_csp_for_symbol(self, symbol, min_return=0.05, max_days_to_expiry=45, min_otm_percentage=0.05):
-        """Process cash-secured put opportunities for a single symbol"""
-        try:
-            # Get current stock price
-            stock_data = self.get_stock_data([symbol])
-            if not stock_data or len(stock_data) == 0:
-                return []
-                
-            current_price = stock_data[0].get('lastPrice')
-            if not current_price:
-                return []
-            
-            # Add a small delay to respect rate limits
-            time.sleep(self.rate_limit_delay)
-            
-            # Get option chains
-            option_data = self.get_option_chain(symbol)
-            if not option_data or 'expirationDates' not in option_data:
-                return []
-                
-            opportunities = []
-            
-            # Process expirations within our timeframe
-            for expiration in option_data['expirationDates']:
-                try:
-                    expiry_date = datetime.fromisoformat(expiration.replace('Z', '+00:00'))
-                    days_to_expiry = (expiry_date - datetime.now()).days
-                    
-                    if days_to_expiry > max_days_to_expiry or days_to_expiry <= 0:
-                        continue
-                        
-                    # Get puts for this expiration
-                    puts = [opt for opt in option_data.get('options', []) 
-                           if opt.get('optionType') == 'PUT' and 
-                           opt.get('expirationDate') == expiration]
-                    
-                    for put in puts:
-                        strike = put.get('strikePrice')
-                        if not strike:
-                            continue
-                            
-                        # Calculate how far OTM this put is
-                        otm_percentage = (current_price - strike) / current_price
-                        
-                        # Skip if it doesn't meet our OTM criteria
-                        if otm_percentage < min_otm_percentage:
-                            continue
-                            
-                        # Check for sufficient liquidity
-                        volume = put.get('volume', 0)
-                        open_interest = put.get('openInterest', 0)
-                        bid_ask_spread = put.get('ask', 0) - put.get('bid', 0)
-                        
-                        # Skip options with low liquidity or wide spreads
-                        if volume < 10 or open_interest < 10 or bid_ask_spread > 0.10 * put.get('bid', 1):
-                            continue
-                            
-                        put_price = put.get('bid', 0)  # Use bid price to be conservative
-                        
-                        # Calculate return metrics
-                        cash_required = strike * 100  # Per contract
-                        premium = put_price * 100  # Per contract
-                        return_rate = premium / cash_required
-                        annualized_return = return_rate * (365 / days_to_expiry)
-                        
-                        if annualized_return >= min_return:
-                            # Calculate additional metrics
-                            effective_cost_basis = strike - put_price
-                            discount_to_current = (current_price - effective_cost_basis) / current_price
-                            
-                            opportunities.append({
-                                'symbol': symbol,
-                                'stock_price': current_price,
-                                'strike': strike,
-                                'expiration_date': expiry_date.strftime('%Y-%m-%d'),
-                                'days_to_expiry': days_to_expiry,
-                                'put_price': put_price,
-                                'bid_ask_spread': bid_ask_spread,
-                                'volume': volume,
-                                'open_interest': open_interest,
-                                'premium': premium,
-                                'cash_required': cash_required,
-                                'return': return_rate,
-                                'annualized_return': annualized_return,
-                                'implied_volatility': put.get('impliedVolatility', 0),
-                                'distance_from_current': otm_percentage,
-                                'effective_cost_basis': effective_cost_basis,
-                                'discount_to_current': discount_to_current
-                            })
-                except Exception as e:
-                    logger.error(f"Error processing expiration for {symbol}: {str(e)}")
-                    continue
-                    
-            return opportunities
-        except Exception as e:
-            logger.error(f"Error processing CSPs for {symbol}: {str(e)}")
-            return []
-
 # Initialize session state
-if 'scanner' not in st.session_state:
-    st.session_state.scanner = OptionsArbitrageScanner()
-    
 if 'scan_results' not in st.session_state:
     st.session_state.scan_results = None
 
-if 'selected_tab' not in st.session_state:
-    st.session_state.selected_tab = "Dashboard"
+# Title and description
+st.title("Options Arbitrage Scanner")
+st.write("Scan for profitable covered call and cash-secured put opportunities")
 
-if 'api_configured' not in st.session_state:
-    st.session_state.api_configured = st.session_state.scanner.api_configured
-
-# Main App UI
-def main():
-    # Sidebar navigation
-    with st.sidebar:
-        st.image("https://img.icons8.com/color/96/000000/bull-chart.png", width=80)
-        st.title("Options Scanner")
+# Simple mock data generator
+def generate_option_data(symbol, strategy_type, min_return, max_days, safety_margin=0.01, min_otm=0.05):
+    """Generate simulated option data for testing"""
+    np.random.seed(hash(symbol) % 100)  # Use symbol as seed for consistent results
+    
+    # Stock price lookup table
+    prices = {
+        "AAPL": 184.25,
+        "MSFT": 417.75,
+        "AMZN": 178.15,
+        "GOOGL": 164.32,
+        "META": 487.95,
+        "TSLA": 201.88,
+        "NVDA": 842.32,
+        "AMD": 174.49,
+        "INTC": 43.15,
+        "NFLX": 625.40
+    }
+    
+    # Use lookup price or generate random
+    if symbol in prices:
+        stock_price = prices[symbol]
+    else:
+        stock_price = np.random.uniform(50, 500)
+    
+    # Generate random results
+    results = []
+    today = datetime.now()
+    
+    # Number of results to generate
+    num_results = np.random.randint(0, 5)
+    
+    for _ in range(num_results):
+        days_to_expiry = np.random.randint(5, max_days)
+        expiry_date = (today + timedelta(days=days_to_expiry)).strftime("%Y-%m-%d")
         
-        # Navigation menu
-        selected_tab = st.radio(
-            "Navigation",
-            ["Dashboard", "Covered Calls", "Cash-Secured Puts", "Watchlist", "Settings"],
-            index=0
+        if strategy_type == "covered_call":
+            # Generate ITM strike price
+            strike = stock_price * np.random.uniform(0.8, 0.98)
+            
+            # Generate call price
+            intrinsic = stock_price - strike
+            time_value = stock_price * 0.01 * (days_to_expiry/30)
+            call_price = intrinsic + time_value
+            
+            # Calculate metrics
+            net_debit = stock_price * (1 + safety_margin) - call_price
+            profit = strike - net_debit
+            ret = profit / net_debit
+            annual_ret = ret * (365 / days_to_expiry)
+            
+            # Only include if meets minimum return
+            if annual_ret >= min_return and net_debit < strike:
+                downside_protection = (stock_price - net_debit) / stock_price
+                
+                results.append({
+                    "symbol": symbol,
+                    "stock_price": stock_price,
+                    "strike": strike,
+                    "expiration_date": expiry_date,
+                    "days_to_expiry": days_to_expiry,
+                    "call_price": call_price,
+                    "net_debit": net_debit,
+                    "profit": profit,
+                    "return": ret,
+                    "annualized_return": annual_ret,
+                    "implied_volatility": np.random.uniform(0.2, 0.6),
+                    "downside_protection": downside_protection,
+                    "volume": np.random.randint(100, 2000),
+                    "open_interest": np.random.randint(500, 5000)
+                })
+        else:  # cash-secured put
+            # Generate OTM strike price
+            otm_factor = np.random.uniform(min_otm, min_otm + 0.2)
+            strike = stock_price * (1 - otm_factor)
+            
+            # Generate put price
+            put_price = stock_price * 0.01 * (days_to_expiry/30) * (1 + otm_factor)
+            
+            # Calculate metrics
+            cash_required = strike * 100
+            premium = put_price * 100
+            ret = premium / cash_required
+            annual_ret = ret * (365 / days_to_expiry)
+            
+            # Only include if meets minimum return
+            if annual_ret >= min_return:
+                effective_cost_basis = strike - put_price
+                discount_to_current = (stock_price - effective_cost_basis) / stock_price
+                
+                results.append({
+                    "symbol": symbol,
+                    "stock_price": stock_price,
+                    "strike": strike,
+                    "expiration_date": expiry_date,
+                    "days_to_expiry": days_to_expiry,
+                    "put_price": put_price,
+                    "premium": premium,
+                    "cash_required": cash_required,
+                    "return": ret,
+                    "annualized_return": annual_ret,
+                    "implied_volatility": np.random.uniform(0.2, 0.6),
+                    "distance_from_current": otm_factor,
+                    "effective_cost_basis": effective_cost_basis,
+                    "discount_to_current": discount_to_current,
+                    "volume": np.random.randint(100, 2000),
+                    "open_interest": np.random.randint(500, 5000)
+                })
+    
+    return results
+
+# Run scan function
+def run_scan(strategy, symbols, min_return, max_days, safety_margin=0.01, min_otm=0.05):
+    """Run a scan for option opportunities"""
+    all_results = []
+    
+    # Create a progress bar
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    # Process each symbol
+    for i, symbol in enumerate(symbols):
+        progress = (i + 1) / len(symbols)
+        progress_bar.progress(progress)
+        status_text.text(f"Scanning {symbol}... ({i+1}/{len(symbols)})")
+        
+        # Generate data for this symbol
+        results = generate_option_data(
+            symbol, 
+            strategy, 
+            min_return, 
+            max_days, 
+            safety_margin, 
+            min_otm
         )
-        st.session_state.selected_tab = selected_tab
         
-        # API status indicator
-        if st.session_state.api_configured:
-            st.success("API Connected", icon="✅")
-        else:
-            st.error("API Not Connected", icon="❌")
-            st.info("Please configure API credentials in Settings tab")
+        all_results.extend(results)
+        time.sleep(0.1)  # Small delay to simulate API call
+    
+    # Clear progress indicators
+    progress_bar.empty()
+    status_text.empty()
+    
+    # Convert to DataFrame
+    if all_results:
+        return pd.DataFrame(all_results).sort_values("annualized_return", ascending=False)
+    else:
+        return pd.DataFrame()
+
+# Sidebar
+with st.sidebar:
+    st.header("Options Scanner")
+    
+    # API status info
+    st.info("⚠️ Using simulated data (Schwab API pending)")
+    st.write("**Schwab API Credentials**")
+    st.write("✓ API Key: Vtbsc861GI4...Ve7O")
+    st.write("✓ Secret: SvMJwXre...BiXr")
+    
+    # Strategy selector
+    strategy = st.radio(
+        "Strategy",
+        ["Covered Calls", "Cash-Secured Puts"],
+        index=0
+    )
+    
+    st.divider()
+    
+    # Common settings
+    st.subheader("Filter Settings")
+    
+    min_return = st.slider(
+        "Min Annual Return",
+        min_value=0.05,
+        max_value=1.0,
+        value=0.15,
+        step=0.05,
+        format="%.2f"
+    )
+    
+    max_days = st.slider(
+        "Max Days to Expiry",
+        min_value=1,
+        max_value=90,
+        value=45
+    )
+    
+    # Strategy-specific settings
+    if strategy == "Covered Calls":
+        safety_margin = st.slider(
+            "Safety Margin",
+            min_value=0.0,
+            max_value=0.05,
+            value=0.01,
+            step=0.005,
+            format="%.3f",
+            help="Additional margin added to stock price to account for execution risk"
+        )
+    else:  # Cash-Secured Puts
+        min_otm = st.slider(
+            "Min OTM Percentage",
+            min_value=0.0,
+            max_value=0.3,
+            value=0.05,
+            step=0.01,
+            format="%.2f",
+            help="Minimum percentage out-of-the-money for puts"
+        )
+    
+    # Symbol selection
+    symbol_option = st.radio(
+        "Symbol Selection",
+        ["Common Stocks", "Custom Symbols"],
+        index=0
+    )
+    
+    if symbol_option == "Common Stocks":
+        selected_symbols = [
+            "AAPL", "MSFT", "AMZN", "GOOGL", "META", 
+            "TSLA", "NVDA", "AMD", "INTC", "NFLX"
+        ]
+    else:
+        symbols_input = st.text_input(
+            "Enter Symbols (comma separated)",
+            value="AAPL,MSFT,AMZN,GOOGL,TSLA"
+        )
+        selected_symbols = [s.strip().upper() for s in symbols_input.split(",") if s.strip()]
+    
+    # Scan button
+    scan_button = st.button("Scan for Opportunities", type="primary", use_container_width=True)
+
+# Trigger scan when button is clicked
+if scan_button:
+    with st.spinner("Running scan..."):
+        if strategy == "Covered Calls":
+            results = run_scan(
+                strategy="covered_call",
+                symbols=selected_symbols,
+                min_return=min_return,
+                max_days=max_days,
+                safety_margin=safety_margin
+            )
+        else:  # Cash-Secured Puts
+            results = run_scan(
+                strategy="cash_secured_put",
+                symbols=selected_symbols,
+                min_return=min_return,
+                max_days=max_days,
+                min_otm=min_otm
+            )
         
-        # Advanced settings if on a scanner page
-        if selected_tab in ["Covered Calls", "Cash-Secured Puts"]:
-            st.divider()
-            st.subheader("Scanner Settings")
-            
-            # Common settings
-            min_return = st.slider(
-                "Min Annual Return",
-                min_value=0.05,
-                max_value=1.0,
-                value=0.15,
-                step=0.05,
-                format="%.2f"
-            )
-            
-            max_days = st.slider(
-                "Max Days to Expiry",
-                min_value=1,
-                max_value=90,
-                value=45
-            )
-            
-            # Strategy-specific settings
-            if selected_tab == "Covered Calls":
-                safety_margin = st.slider(
-                    "Safety Margin",
-                    min_value=0.0,
-                    max_value=0.05,
-                    value=0.01,
-                    step=0.005,
-                    format="%.3f"
-                )
-                
-                min_downside = st.slider(
-                    "Min Downside Protection",
-                    min_value=0.0,
-                    max_value=0.3,
-                    value=0.05,
-                    step=0.01,
-                    format="%.2f"
-                )
-                
-                st.session_state.cc_settings = {
-                    'min_return': min_return,
-                    'max_days': max_days,
-                    'safety_margin': safety_margin,
-                    'min_downside': min_downside
-                }
-                
-            else:  # Cash-Secured Puts
-                min_otm = st.slider(
-                    "Min OTM Percentage",
-                    min_value=0.0,
-                    max_value=0.3,
-                    value=0.05,
-                    step=0.01,
-                    format="%.2f"
-                )
-                
-                st.session_state.csp_settings = {
-                    'min_return': min_return,
-                    'max_days': max_days,
-                    'min_otm': min_otm
-                }
-            
-            # Symbol selection
-            symbol_option = st.radio(
-                "Symbol Selection",
-                ["Scan All Symbols", "Use Watchlist", "Specific Symbols"],
-                index=0
-            )
-            
-            selected_symbols = None
-            max_symbols = None
-            
-            if symbol_option == "Scan All Symbols":
-                max_symbols = st.number_input(
-                    "Max Symbols to Scan",
-                    min_value=10,
-                    max_value=5000,
-                    value=100,
-                    help="Limit the total number of symbols scanned"
-                )
-            elif symbol_option == "Use Watchlist":
-                st.info("Using symbols from your watchlist")
-                # In a real app, you would load the user's watchlist here
-                selected_symbols = ["AAPL", "MSFT", "AMZN", "TSLA", "NVDA"]
-            else:  # Specific Symbols
-                symbols_input = st.text_input(
-                    "Enter Symbols (comma separated)",
-                    value="AAPL,MSFT,AMZN,GOOGL,TSLA"
-                )
-                selected_symbols = [s.strip().upper() for s in symbols_input.split(",") if s.strip()]
-            
-            st.session_state.symbol_selection = {
-                'option': symbol_option,
-                'selected_symbols': selected_symbols,
-                'max_symbols': max_symbols
-            }
-            
+        # Save results to session state
+        st.session_state.scan_results = {
+            "type": "covered_call" if strategy == "Covered Calls" else "cash_secured_put",
+            "data": results,
+            "timestamp": datetime.now()
+        }
+
+# Display scan results
+if 'scan_results' in st.session_state and st.session_state.scan_results is not None:
+    results = st.session_state.scan_results.get('data')
+    result_type = st.session_state.scan_results.get('type')
+    timestamp = st.session_state.scan_results.get('timestamp')
+    
+    # Show results summary
+    if not results.empty:
+        st.success(f"Found {len(results)} opportunities (Scan time: {timestamp.strftime('%I:%M:%S %p')})")
         
+        # Display results based on strategy
+        if result_type == "covered_call":
+            # Format display data
+            display_data = results.copy()
+            
+            # Format percentages
+            display_data['return'] = display_data['return'].apply(lambda x: f"{x:.2%}")
+            display_data['annualized_return'] = display_data['annualized_return'].apply(lambda x: f"{x:.2%}")
+            display_data['downside_protection'] = display_data['downside_protection'].apply(lambda x: f"{x:.2%}")
+            display_data['implied_volatility'] = display_data['implied_volatility'].apply(lambda x: f"{x:.2%}")
+            
+            # Format currency values
+            for col in ['stock_price', 'strike', 'call_price', 'net_debit', 'profit']:
+                display_data[col] = display_data[col].apply(lambda x: f"${x:.2f}")
+                
+            # Display table
+            st.subheader("Covered Call Opportunities")
+            st.dataframe(display_data, use_container_width=True)
+            
+        else:  # cash_secured_put
+            # Format display data
+            display_data = results.copy()
+            
+            # Format percentages
+            display_data['return'] = display_data['return'].apply(lambda x: f"{x:.2%}")
+            display_data['annualized_return'] = display_data['annualized_return'].apply(lambda x: f"{x:.2%}")
+            display_data['distance_from_current'] = display_data['distance_from_current'].apply(lambda x: f"{x:.2%}")
+            display_data['discount_to_current'] = display_data['discount_to_current'].apply(lambda x: f"{x:.2%}")
+            display_data['implied_volatility'] = display_data['implied_volatility'].apply(lambda x: f"{x:.2%}")
+            
+            # Format currency values
+            for col in ['stock_price', 'strike', 'put_price', 'effective_cost_basis']:
+                display_data[col] = display_data[col].apply(lambda x: f"${x:.2f}")
+                
+            display_data['premium'] = display_data['premium'].apply(lambda x: f"${x:.2f}")
+            display_data['cash_required'] = display_data['cash_required'].apply(lambda x: f"${x:.2f}")
+            
+            # Display table
+            st.subheader("Cash-Secured Put Opportunities")
+            st.dataframe(display_data, use_container_width=True)
+            
+    else:
+        st.info("No opportunities found matching your criteria. Try adjusting your filter settings.")
+else:
+    # Initial state - show instructions
+    st.info("Use the sidebar to configure and run a scan for option opportunities.")
+    
+    # Show example of what the app does
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Covered Call Arbitrage")
+        st.write("""
+        The scanner looks for covered call opportunities where buying the stock and 
+        immediately selling a call option creates an arbitrage situation (guaranteed profit).
+        
+        Key metrics analyzed:
+        - Net debit (stock price - call premium)
+        - Profit (strike price - net debit)
+        - Annualized return
+        - Downside protection
+        """)
+    
+    with col2:
+        st.subheader("Cash-Secured Puts")
+        st.write("""
+        The scanner finds attractive cash-secured put opportunities based on:
+        - Put option premium relative to cash required
+        - Annualized return
+        - Distance out-of-the-money
+        - Discount to current price if assigned
+        
+        This strategy is ideal for generating income or acquiring stocks at a discount.
+        """)
