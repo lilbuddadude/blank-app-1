@@ -36,16 +36,9 @@ def generate_option_data(symbol, strategy_type, filters):
         "AMD": 174.49,
         "INTC": 43.15,
         "NFLX": 625.40,
-        "DIS": 114.75,
-        "BA": 178.22,
-        "JPM": 195.24,
-        "V": 280.85,
-        "MA": 465.37,
-        "PFE": 27.55,
-        "JNJ": 151.75,
-        "WMT": 59.96,
-        "HD": 353.48,
-        "COST": 731.98
+        "SMCI": 46.07,
+        "NVDL": 54.05,
+        "NVDX": 11.33
     }
     
     # Use lookup price or generate random
@@ -107,7 +100,7 @@ def generate_option_data(symbol, strategy_type, filters):
         if filters.get('max_days') and days_to_expiry > filters['max_days']:
             continue
             
-        expiry_str = expiry_date.strftime("%Y-%m-%d")
+        expiry_str = expiry_date.strftime("%m/%d/%y")
         
         # Process each strike price
         for strike in strikes:
@@ -121,7 +114,7 @@ def generate_option_data(symbol, strategy_type, filters):
             base_iv = 0.25  # Base IV of 25%
             
             # Add variance based on stock (some stocks are more volatile)
-            volatile_stocks = ['TSLA', 'NVDA', 'AMD', 'ROKU', 'GME', 'AMC']
+            volatile_stocks = ['TSLA', 'NVDA', 'AMD', 'SMCI', 'NVDL', 'NVDX']
             if symbol in volatile_stocks:
                 base_iv += 0.15  # Add 15% for volatile stocks
             
@@ -136,64 +129,98 @@ def generate_option_data(symbol, strategy_type, filters):
             iv = base_iv + iv_time_factor + iv_strike_factor
             iv = max(0.1, min(0.9, iv))  # Cap between 10% and 90%
             
+            # Convert to IV percentage (like in barchart)
+            iv_percentage = iv * 100
+            
             # Skip if IV doesn't meet filter criteria
             if filters.get('min_iv') and iv < filters['min_iv']:
                 continue
             if filters.get('max_iv') and iv > filters['max_iv']:
                 continue
             
+            # Calculate delta and OTM probability
             if strategy_type == "covered_call":
-                # Only process strikes below current price (ITM) for covered calls
-                if strike >= stock_price:
-                    continue
+                # For calls, delta decreases as strike increases
+                delta = max(0.01, min(0.99, 0.99 - (strike / stock_price - 0.7) * 1.5))
+                otm_prob = (1 - delta) * 100  # OTM probability as percentage
+                
+                # Calculate moneyness (as percentage below stock price)
+                moneyness = (strike - stock_price) / stock_price * 100
                 
                 # Generate call price
-                intrinsic = stock_price - strike
+                intrinsic = max(0, stock_price - strike)
                 time_value = stock_price * iv * np.sqrt(days_to_expiry/365) / 10
                 call_price = intrinsic + time_value
                 
-                # Calculate metrics
-                net_debit = stock_price * (1 + filters.get('safety_margin', 0)) - call_price
+                # Calculate volume and open interest
+                atm_factor = 1 - min(0.8, abs(strike - stock_price) / stock_price)
+                time_factor = 1 - min(0.8, days_to_expiry / 300)
+                liquidity_factor = atm_factor * time_factor
+                
+                volume = int(2000 * liquidity_factor) + np.random.randint(100, 1000)
+                open_interest = int(10000 * liquidity_factor) + np.random.randint(100, 3000)
+                
+                # Calculate bid and ask
+                bid_price = round(call_price * 0.95, 2)
+                ask_price = round(call_price * 1.05, 2)
+                
+                # Calculate break-even
+                break_even = stock_price - bid_price
+                
+                # Calculate break-even percentage
+                be_percentage = (break_even - stock_price) / stock_price * 100
+                
+                # Calculate metrics for our strategy
+                net_debit = stock_price * (1 + filters.get('safety_margin', 0)) - bid_price
                 profit = strike - net_debit
                 ret = profit / net_debit
                 annual_ret = ret * (365 / days_to_expiry)
+                annual_ret_pct = annual_ret * 100  # As percentage
                 
-                # Only include if meets minimum return
+                # Calculate potential return
+                potential_return = bid_price / stock_price * 100
+                
+                # Only include if meets minimum return criteria
                 if annual_ret >= filters.get('min_return', 0) and net_debit < strike:
+                    # Calculate downside protection
                     downside_protection = (stock_price - net_debit) / stock_price
                     
                     # Skip if doesn't meet downside protection criteria
                     if filters.get('min_downside') and downside_protection < filters['min_downside']:
                         continue
                     
-                    # Calculate volume and open interest (higher for near-term and near-the-money)
-                    atm_factor = 1 - min(0.8, abs(strike - stock_price) / stock_price)
-                    time_factor = 1 - min(0.8, days_to_expiry / 300)
-                    liquidity_factor = atm_factor * time_factor
-                    
-                    volume = int(2000 * liquidity_factor)
-                    open_interest = int(10000 * liquidity_factor)
-                    
                     results.append({
                         "symbol": symbol,
-                        "stock_price": stock_price,
+                        "price": stock_price,
+                        "exp_date": expiry_str,
                         "strike": strike,
-                        "expiration_date": expiry_str,
-                        "days_to_expiry": days_to_expiry,
-                        "call_price": call_price,
+                        "moneyness": moneyness,
+                        "bid": bid_price,
+                        "be_bid": break_even,
+                        "be_pct": be_percentage,
+                        "volume": volume,
+                        "open_int": open_interest,
+                        "iv_pct": iv_percentage,
+                        "delta": delta,
+                        "otm_prob": otm_prob,
+                        "pnl_rtn": potential_return,
+                        "ann_rtn": annual_ret_pct,
                         "net_debit": net_debit,
                         "profit": profit,
                         "return": ret,
                         "annualized_return": annual_ret,
                         "implied_volatility": iv,
                         "downside_protection": downside_protection,
-                        "volume": volume,
-                        "open_interest": open_interest
+                        "last_trade": f"{np.random.randint(1, 15)}:{np.random.randint(0, 59)} ET"
                     })
             else:  # cash-secured put
-                # Only process strikes below current price (OTM) for cash-secured puts
-                if strike > stock_price:
-                    continue
+                # For puts, delta increases as strike decreases
+                delta = max(0.01, min(0.99, 1.7 * (stock_price / strike - 0.7)))
+                delta = 1 - delta  # Convert to put delta (negative, but we'll display absolute value)
+                otm_prob = delta * 100  # OTM probability as percentage
+                
+                # Calculate moneyness (as percentage below stock price)
+                moneyness = (strike - stock_price) / stock_price * 100
                 
                 # Calculate how far OTM
                 otm_percentage = (stock_price - strike) / stock_price
@@ -203,34 +230,59 @@ def generate_option_data(symbol, strategy_type, filters):
                     continue
                 
                 # Generate put price based on time value and IV
-                put_price = stock_price * iv * np.sqrt(days_to_expiry/365) / 10
+                intrinsic = max(0, strike - stock_price)
+                time_value = stock_price * iv * np.sqrt(days_to_expiry/365) / 10
+                put_price = intrinsic + time_value
+                
+                # Calculate volume and open interest
+                atm_factor = 1 - min(0.8, abs(strike - stock_price) / stock_price)
+                time_factor = 1 - min(0.8, days_to_expiry / 300)
+                liquidity_factor = atm_factor * time_factor
+                
+                volume = int(2000 * liquidity_factor) + np.random.randint(100, 1000)
+                open_interest = int(10000 * liquidity_factor) + np.random.randint(100, 3000)
+                
+                # Calculate bid and ask
+                bid_price = round(put_price * 0.95, 2)
+                ask_price = round(put_price * 1.05, 2)
+                
+                # Calculate break-even
+                break_even = strike - bid_price
+                
+                # Calculate break-even percentage
+                be_percentage = (break_even - stock_price) / stock_price * 100
                 
                 # Calculate metrics
                 cash_required = strike * 100  # Per contract
-                premium = put_price * 100  # Per contract
+                premium = bid_price * 100  # Per contract
                 ret = premium / cash_required
                 annual_ret = ret * (365 / days_to_expiry)
+                annual_ret_pct = annual_ret * 100  # As percentage
+                
+                # Calculate potential return
+                potential_return = bid_price / stock_price * 100
                 
                 # Only include if meets minimum return
                 if annual_ret >= filters.get('min_return', 0):
-                    effective_cost_basis = strike - put_price
+                    effective_cost_basis = strike - bid_price
                     discount_to_current = (stock_price - effective_cost_basis) / stock_price
-                    
-                    # Calculate volume and open interest (higher for near-term and near-the-money)
-                    atm_factor = 1 - min(0.8, abs(strike - stock_price) / stock_price)
-                    time_factor = 1 - min(0.8, days_to_expiry / 300)
-                    liquidity_factor = atm_factor * time_factor
-                    
-                    volume = int(2000 * liquidity_factor)
-                    open_interest = int(10000 * liquidity_factor)
                     
                     results.append({
                         "symbol": symbol,
-                        "stock_price": stock_price,
+                        "price": stock_price,
+                        "exp_date": expiry_str,
                         "strike": strike,
-                        "expiration_date": expiry_str,
-                        "days_to_expiry": days_to_expiry,
-                        "put_price": put_price,
+                        "moneyness": moneyness,
+                        "bid": bid_price,
+                        "be_bid": break_even,
+                        "be_pct": be_percentage,
+                        "volume": volume,
+                        "open_int": open_interest,
+                        "iv_pct": iv_percentage,
+                        "delta": abs(delta),  # Display absolute value
+                        "otm_prob": otm_prob,
+                        "pnl_rtn": potential_return,
+                        "ann_rtn": annual_ret_pct,
                         "premium": premium,
                         "cash_required": cash_required,
                         "return": ret,
@@ -239,8 +291,7 @@ def generate_option_data(symbol, strategy_type, filters):
                         "distance_from_current": otm_percentage,
                         "effective_cost_basis": effective_cost_basis,
                         "discount_to_current": discount_to_current,
-                        "volume": volume,
-                        "open_interest": open_interest
+                        "last_trade": f"{np.random.randint(1, 15)}:{np.random.randint(0, 59)} ET"
                     })
     
     return results
@@ -276,7 +327,7 @@ def run_scan(strategy, symbols, filters):
     
     # Convert to DataFrame
     if all_results:
-        return pd.DataFrame(all_results).sort_values("annualized_return", ascending=False)
+        return pd.DataFrame(all_results).sort_values("ann_rtn", ascending=False)
     else:
         return pd.DataFrame()
 
@@ -309,13 +360,14 @@ with st.sidebar:
     if symbol_option == "Common Stocks":
         selected_symbols = [
             "AAPL", "MSFT", "AMZN", "GOOGL", "META", 
-            "TSLA", "NVDA", "AMD", "INTC", "NFLX"
+            "TSLA", "NVDA", "AMD", "INTC", "NFLX",
+            "SMCI", "NVDL", "NVDX"
         ]
         st.write(f"Selected: {', '.join(selected_symbols)}")
     else:
         symbols_input = st.text_input(
             "Enter Symbols (comma separated)",
-            value="AAPL,MSFT,AMZN,GOOGL,TSLA"
+            value="SMCI,NVDA,NVDL,NVDX,AAPL,MSFT"
         )
         selected_symbols = [s.strip().upper() for s in symbols_input.split(",") if s.strip()]
     
@@ -328,11 +380,11 @@ with st.sidebar:
         min_return = st.slider(
             "Min Annual Return",
             min_value=0.05,
-            max_value=1.0,
-            value=0.15,
-            step=0.05,
-            format="%.2f"
-        )
+            max_value=20.0,
+            value=1.0,
+            step=0.1,
+            format="%.1f"
+        ) / 100  # Convert to decimal
         
         if strategy == "Covered Calls":
             min_downside = st.slider(
@@ -461,47 +513,88 @@ if 'scan_results' in st.session_state and st.session_state.scan_results is not N
     if not results.empty:
         st.success(f"Found {len(results)} opportunities (Scan time: {timestamp.strftime('%I:%M:%S %p')})")
         
-        # Display results based on strategy
-        if result_type == "covered_call":
-            # Format display data
-            display_data = results.copy()
-            
-            # Format percentages
-            display_data['return'] = display_data['return'].apply(lambda x: f"{x:.2%}")
-            display_data['annualized_return'] = display_data['annualized_return'].apply(lambda x: f"{x:.2%}")
-            display_data['downside_protection'] = display_data['downside_protection'].apply(lambda x: f"{x:.2%}")
-            display_data['implied_volatility'] = display_data['implied_volatility'].apply(lambda x: f"{x:.2%}")
-            
-            # Format currency values
-            for col in ['stock_price', 'strike', 'call_price', 'net_debit', 'profit']:
-                display_data[col] = display_data[col].apply(lambda x: f"${x:.2f}")
+        # Common columns for both strategies (Barchart-style)
+        display_columns = [
+            'symbol', 'price', 'exp_date', 'strike', 'moneyness', 'bid', 
+            'be_bid', 'be_pct', 'volume', 'open_int', 'iv_pct', 'delta', 
+            'otm_prob', 'pnl_rtn', 'ann_rtn', 'last_trade'
+        ]
+        
+        display_headers = [
+            'Symbol', 'Price', 'Exp Date', 'Strike', 'Moneyness', 'Bid', 
+            'BE (Bid)', 'BE%', 'Volume', 'Open Int', 'IV', 'Delta', 
+            'OTM Prob', 'Ptnl Rtn', 'Ann Rtn', 'Last Trade'
+        ]
+        
+        # Select only the columns we want to display
+        display_data = results[display_columns].copy()
+        
+        # Format the data
+        display_data['moneyness'] = display_data['moneyness'].apply(lambda x: f"{x:.2f}%")
+        display_data['be_pct'] = display_data['be_pct'].apply(lambda x: f"{x:.2f}%")
+        display_data['iv_pct'] = display_data['iv_pct'].apply(lambda x: f"{x:.2f}%")
+        display_data['delta'] = display_data['delta'].apply(lambda x: f"{x:.4f}")
+        display_data['otm_prob'] = display_data['otm_prob'].apply(lambda x: f"{x:.2f}%")
+        display_data['pnl_rtn'] = display_data['pnl_rtn'].apply(lambda x: f"{x:.1f}%")
+        display_data['ann_rtn'] = display_data['ann_rtn'].apply(lambda x: f"{x:.1f}%")
+        
+        # Rename columns
+        display_data.columns = display_headers
+        
+        # Display table in a Barchart.com-like style
+        st.subheader(f"{'Covered Call' if result_type == 'covered_call' else 'Cash-Secured Put'} Opportunities")
+        
+        # Apply custom CSS for table styling
+        st.markdown("""
+        <style>
+        table.dataframe {
+            border-collapse: collapse;
+            border: none;
+            font-size: 0.9em;
+        }
+        table.dataframe th {
+            background-color: #f2f2f2;
+            color: #333;
+            font-weight: bold;
+            text-align: center;
+            padding: 8px;
+            border: 1px solid #ddd;
+        }
+        table.dataframe td {
+            text-align: right;
+            padding: 8px;
+            border: 1px solid #ddd;
+        }
+        table.dataframe tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        table.dataframe tr:hover {
+            background-color: #f0f0f0;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        # Display the dataframe
+        st.dataframe(display_data, use_container_width=True, hide_index=True)
+        
+        # Add a details section to show additional metrics
+        with st.expander("Show Additional Metrics"):
+            if result_type == "covered_call":
+                # Format additional metrics for covered calls
+                additional_data = results[['symbol', 'net_debit', 'profit', 'return', 'downside_protection']].copy()
+                additional_data['return'] = additional_data['return'].apply(lambda x: f"{x:.2%}")
+                additional_data['downside_protection'] = additional_data['downside_protection'].apply(lambda x: f"{x:.2%}")
+                additional_data.columns = ['Symbol', 'Net Debit', 'Profit', 'Return', 'Downside Protection']
                 
-            # Display table
-            st.subheader("Covered Call Opportunities")
-            st.dataframe(display_data, use_container_width=True)
-            
-        else:  # cash_secured_put
-            # Format display data
-            display_data = results.copy()
-            
-            # Format percentages
-            display_data['return'] = display_data['return'].apply(lambda x: f"{x:.2%}")
-            display_data['annualized_return'] = display_data['annualized_return'].apply(lambda x: f"{x:.2%}")
-            display_data['distance_from_current'] = display_data['distance_from_current'].apply(lambda x: f"{x:.2%}")
-            display_data['discount_to_current'] = display_data['discount_to_current'].apply(lambda x: f"{x:.2%}")
-            display_data['implied_volatility'] = display_data['implied_volatility'].apply(lambda x: f"{x:.2%}")
-            
-            # Format currency values
-            for col in ['stock_price', 'strike', 'put_price', 'effective_cost_basis']:
-                display_data[col] = display_data[col].apply(lambda x: f"${x:.2f}")
+                st.dataframe(additional_data, use_container_width=True, hide_index=True)
+            else:
+                # Format additional metrics for cash-secured puts
+                additional_data = results[['symbol', 'premium', 'cash_required', 'return', 'effective_cost_basis', 'discount_to_current']].copy()
+                additional_data['return'] = additional_data['return'].apply(lambda x: f"{x:.2%}")
+                additional_data['discount_to_current'] = additional_data['discount_to_current'].apply(lambda x: f"{x:.2%}")
+                additional_data.columns = ['Symbol', 'Premium', 'Cash Required', 'Return', 'Effective Cost Basis', 'Discount to Current']
                 
-            display_data['premium'] = display_data['premium'].apply(lambda x: f"${x:.2f}")
-            display_data['cash_required'] = display_data['cash_required'].apply(lambda x: f"${x:.2f}")
-            
-            # Display table
-            st.subheader("Cash-Secured Put Opportunities")
-            st.dataframe(display_data, use_container_width=True)
-            
+                st.dataframe(additional_data, use_container_width=True, hide_index=True)
     else:
         st.info("No opportunities found matching your criteria. Try adjusting your filter settings.")
 else:
