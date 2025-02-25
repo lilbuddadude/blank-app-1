@@ -585,26 +585,26 @@ if scan_button:
         # Display HTML-formatted table with colored cells
         st.markdown(display_html.to_html(escape=False, index=False), unsafe_allow_html=True)
         
-        # Add a details section to show additional metrics
-        with st.expander("Show Additional Metrics"):
-            if result_type == "covered_call":
-                # Format additional metrics for covered calls
-                additional_data = results[['symbol', 'net_debit', 'profit', 'return', 'downside_protection']].copy()
-                additional_data['return'] = additional_data['return'].apply(lambda x: f"{x:.2%}")
-                additional_data['downside_protection'] = additional_data['downside_protection'].apply(lambda x: f"{x:.2%}")
-                additional_data.columns = ['Symbol', 'Net Debit', 'Profit', 'Return', 'Downside Protection']
-                
-                st.dataframe(additional_data, use_container_width=True, hide_index=True)
-            else:
-                # Format additional metrics for cash-secured puts
-                additional_data = results[['symbol', 'premium', 'cash_required', 'return', 'effective_cost_basis', 'discount_to_current']].copy()
-                additional_data['return'] = additional_data['return'].apply(lambda x: f"{x:.2%}")
-                additional_data['discount_to_current'] = additional_data['discount_to_current'].apply(lambda x: f"{x:.2%}")
-                additional_data.columns = ['Symbol', 'Premium', 'Cash Required', 'Return', 'Effective Cost Basis', 'Discount to Current']
-                
-                st.dataframe(additional_data, use_container_width=True, hide_index=True)
+       # Add a details section to show additional metrics
+with st.expander("Show Additional Metrics"):
+    if result_type == "covered_call":
+        # Format additional metrics for covered calls
+        additional_data = results[['symbol', 'net_debit', 'profit', 'return', 'downside_protection']].copy()
+        additional_data['return'] = additional_data['return'].apply(lambda x: f"{x:.2%}")
+        additional_data['downside_protection'] = additional_data['downside_protection'].apply(lambda x: f"{x:.2%}")
+        additional_data.columns = ['Symbol', 'Net Debit', 'Profit', 'Return', 'Downside Protection']
+        
+        st.dataframe(additional_data, use_container_width=True, hide_index=True)
     else:
-        st.info("No opportunities found matching your criteria. Try adjusting your filter settings.")
+        # Format additional metrics for cash-secured puts
+        additional_data = results[['symbol', 'premium', 'cash_required', 'return', 'effective_cost_basis', 'discount_to_current']].copy()
+        additional_data['return'] = additional_data['return'].apply(lambda x: f"{x:.2%}")
+        additional_data['discount_to_current'] = additional_data['discount_to_current'].apply(lambda x: f"{x:.2%}")
+        additional_data.columns = ['Symbol', 'Premium', 'Cash Required', 'Return', 'Effective Cost Basis', 'Discount to Current']
+        
+        st.dataframe(additional_data, use_container_width=True, hide_index=True)
+else:
+    st.info("No opportunities found matching your criteria. Try adjusting your filter settings.")
 else:
     # Initial state - show instructions
     st.info("Use the sidebar to configure and run a scan for option opportunities.")
