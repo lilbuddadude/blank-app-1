@@ -510,23 +510,6 @@ if scan_button:
             "timestamp": datetime.now()
         }
 
-# Display scan results
-if 'scan_results' in st.session_state and st.session_state.scan_results is not None:
-    results = st.session_state.scan_results.get('data')
-    result_type = st.session_state.scan_results.get('type')
-    timestamp = st.session_state.scan_results.get('timestamp')
-    
-    # Show results summary
-    if not results.empty:
-        st.success(f"Found {len(results)} opportunities (Scan time: {timestamp.strftime('%I:%M:%S %p')})")
-        
-        # Common columns for both strategies (Barchart-style)
-        display_columns = [
-            'symbol', 'price', 'exp_date', 'strike', 'moneyness', 'bid', 
-            'net_profit', 'be_bid', 'be_pct', 'volume', 'open_int', 'iv_pct', 'delta', 
-            'otm_prob', 'pnl_rtn', 'ann_rtn', 'last_trade'
-        ]
-        
         # Prepare the display data with correct formatting
         display_data = results[display_columns].copy()
         
@@ -546,6 +529,25 @@ if 'scan_results' in st.session_state and st.session_state.scan_results is not N
         display_data.columns = ['Symbol', 'Price', 'Exp Date', 'Strike', 'Moneyness', 'Bid', 
             'Net Profit', 'BE (Bid)', 'BE%', 'Volume', 'Open Int', 'IV', 'Delta', 
             'OTM Prob', 'Ptnl Rtn', 'Ann Rtn', 'Last Trade']
+        
+        # Prepare styled data with colored moneyness and net profit
+        def color_formatter(col_name):
+            def format_cell(x):
+                try:
+                    # Remove currency or percentage symbols for parsing
+                    value = float(x.replace('$', '').replace('%', ''))
+                    if value < 0:
+                        return f'<span style="color: red;">{x}</span>'
+                    else:
+                        return f'<span style="color: green;">{x}</span>'
+                except:
+                    return x
+            return format_cell
+
+        # Create a copy of the data for HTML formatting
+        display_html = display_data.copy()
+        display_html['Moneyness'] = display_data['Moneyness'].apply(color_formatter('Moneyness'))
+        display_html['Net Profit'] = display_data['Net Profit'].apply(color_formatter('Net Profit'))
         
         # Use st.dataframe for interactive sorting
         st.dataframe(
@@ -579,6 +581,9 @@ if 'scan_results' in st.session_state and st.session_state.scan_results is not N
                 )
             }
         )
+        
+        # Display HTML-formatted table with colored cells
+        st.markdown(display_html.to_html(escape=False, index=False), unsafe_allow_html=True)
         
         # Add a details section to show additional metrics
         with st.expander("Show Additional Metrics"):
