@@ -786,6 +786,4 @@ def run_enhanced_app():
             else:
                 display_csp_results(st.session_state.scan_results['data'])
         
-        with tab2:
-            if not st.session_state.scan_results['data'].empty:
-                if
+    
