@@ -180,9 +180,9 @@ def generate_option_data(symbol, strategy_type, filters):
                 # Calculate potential return
                 potential_return = bid_price / stock_price * 100
                 
-                # Calculate net profit (new column)
-                # net profit = (100 x current stock price) - (100 x strike price) + option price x 100
-                net_profit = (100 * stock_price) - (100 * strike) + (bid_price * 100)
+                # Calculate net profit using corrected formula
+                # Net profit = (Bid x 100) - ((100 x current stock price) - (100 x strike))
+                net_profit = (bid_price * 100) - ((100 * stock_price) - (100 * strike))
                 
                 # Only include if meets minimum return criteria
                 if annual_ret >= filters.get('min_return', 0) and net_debit < strike:
@@ -200,6 +200,7 @@ def generate_option_data(symbol, strategy_type, filters):
                         "strike": strike,
                         "moneyness": moneyness,
                         "bid": bid_price,
+                        "net_profit": net_profit,  # New position between bid and BE
                         "be_bid": break_even,
                         "be_pct": be_percentage,
                         "volume": volume,
@@ -209,7 +210,6 @@ def generate_option_data(symbol, strategy_type, filters):
                         "otm_prob": otm_prob,
                         "pnl_rtn": potential_return,
                         "ann_rtn": annual_ret_pct,
-                        "net_profit": net_profit,
                         "net_debit": net_debit,
                         "profit": profit,
                         "return": ret,
@@ -267,10 +267,9 @@ def generate_option_data(symbol, strategy_type, filters):
                 # Calculate potential return
                 potential_return = bid_price / stock_price * 100
                 
-                # Calculate net profit (new column)
-                # net profit = (100 x strike price) - (100 x current stock price) + option price x 100
-                # For puts, it's the inverse of calls
-                net_profit = (100 * strike) - (100 * stock_price) + (bid_price * 100)
+                # Calculate net profit using corrected formula for puts
+                # For puts: Net profit = (Bid x 100) - ((100 x strike) - (100 x current stock price))
+                net_profit = (bid_price * 100) - ((100 * strike) - (100 * stock_price))
                 
                 # Only include if meets minimum return
                 if annual_ret >= filters.get('min_return', 0):
@@ -284,6 +283,7 @@ def generate_option_data(symbol, strategy_type, filters):
                         "strike": strike,
                         "moneyness": moneyness,
                         "bid": bid_price,
+                        "net_profit": net_profit,  # New position between bid and BE
                         "be_bid": break_even,
                         "be_pct": be_percentage,
                         "volume": volume,
@@ -293,7 +293,6 @@ def generate_option_data(symbol, strategy_type, filters):
                         "otm_prob": otm_prob,
                         "pnl_rtn": potential_return,
                         "ann_rtn": annual_ret_pct,
-                        "net_profit": net_profit,
                         "premium": premium,
                         "cash_required": cash_required,
                         "return": ret,
@@ -525,16 +524,17 @@ if 'scan_results' in st.session_state and st.session_state.scan_results is not N
         st.success(f"Found {len(results)} opportunities (Scan time: {timestamp.strftime('%I:%M:%S %p')})")
         
         # Common columns for both strategies (Barchart-style)
+        # Note: net_profit has been positioned between bid and be_bid as requested
         display_columns = [
             'symbol', 'price', 'exp_date', 'strike', 'moneyness', 'bid', 
-            'be_bid', 'be_pct', 'volume', 'open_int', 'iv_pct', 'delta', 
-            'otm_prob', 'net_profit', 'pnl_rtn', 'ann_rtn', 'last_trade'
+            'net_profit', 'be_bid', 'be_pct', 'volume', 'open_int', 
+            'iv_pct', 'delta', 'otm_prob', 'pnl_rtn', 'ann_rtn', 'last_trade'
         ]
         
         display_headers = [
             'Symbol', 'Price', 'Exp Date', 'Strike', 'Moneyness', 'Bid', 
-            'BE (Bid)', 'BE%', 'Volume', 'Open Int', 'IV', 'Delta', 
-            'OTM Prob', 'Net Profit', 'Ptnl Rtn', 'Ann Rtn', 'Last Trade'
+            'Net Profit', 'BE (Bid)', 'BE%', 'Volume', 'Open Int', 
+            'IV', 'Delta', 'OTM Prob', 'Ptnl Rtn', 'Ann Rtn', 'Last Trade'
         ]
         
         # Select only the columns we want to display
@@ -547,38 +547,31 @@ if 'scan_results' in st.session_state and st.session_state.scan_results is not N
             border-collapse: collapse;
             border: none;
             font-size: 0.9em;
-            width: 100%;
-            background-color: #1e1e1e;
-            color: #e0e0e0;
         }
         table.dataframe th {
-            background-color: #333333;
-            color: #f0f0f0;
+            background-color: #f2f2f2;
+            color: #333;
             font-weight: bold;
             text-align: center;
-            padding: 10px;
-            border: 1px solid #555;
+            padding: 8px;
+            border: 1px solid #ddd;
         }
         table.dataframe td {
             text-align: right;
             padding: 8px;
-            border: 1px solid #444;
-            background-color: #2a2a2a;
-            color: #e0e0e0;
+            border: 1px solid #ddd;
         }
-        table.dataframe tr:nth-child(even) td {
-            background-color: #262626;
+        table.dataframe tr:nth-child(even) {
+            background-color: #f9f9f9;
         }
-        table.dataframe tr:hover td {
-            background-color: #3a3a3a;
+        table.dataframe tr:hover {
+            background-color: #f0f0f0;
         }
         .positive {
-            color: #4dff4d;
-            font-weight: bold;
+            color: green;
         }
         .negative {
-            color: #ff4d4d;
-            font-weight: bold;
+            color: red;
         }
         </style>
         """, unsafe_allow_html=True)
