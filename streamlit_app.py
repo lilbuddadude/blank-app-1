@@ -230,75 +230,52 @@ if 'scan_results' in st.session_state and st.session_state.scan_results is not N
         # Select only the columns we want to display
         display_data = results[display_columns].copy()
         
-        # Format the data for display - this is only for the CSV download
-        formatted_data = display_data.copy()
-        formatted_data['price'] = formatted_data['price'].apply(lambda x: f"${x:.2f}")
-        formatted_data['strike'] = formatted_data['strike'].apply(lambda x: f"${x:.2f}")
-        formatted_data['bid'] = formatted_data['bid'].apply(lambda x: f"${x:.2f}")
-        formatted_data['net_profit'] = formatted_data['net_profit'].apply(lambda x: f"${x:.2f}")
-        formatted_data['be_bid'] = formatted_data['be_bid'].apply(lambda x: f"${x:.2f}")
-        formatted_data['be_pct'] = formatted_data['be_pct'].apply(lambda x: f"{x:.2f}%")
-        formatted_data['iv_pct'] = formatted_data['iv_pct'].apply(lambda x: f"{x:.2f}%")
-        formatted_data['delta'] = formatted_data['delta'].apply(lambda x: f"{x:.4f}")
-        formatted_data['otm_prob'] = formatted_data['otm_prob'].apply(lambda x: f"{x:.2f}%")
-        formatted_data['pnl_rtn'] = formatted_data['pnl_rtn'].apply(lambda x: f"{x:.1f}%")
-        formatted_data['ann_rtn'] = formatted_data['ann_rtn'].apply(lambda x: f"{x:.1f}%")
+        # Create new dataframe for display with formatted values
+        formatted_df = pd.DataFrame()
         
-        # Instead of custom CSS, directly use Streamlit's built-in dataframe display
-        # But first, add color formatting for the moneyness and net profit columns
+        # Copy and format each column
+        formatted_df['Symbol'] = display_data['symbol']
+        formatted_df['Price'] = display_data['price'].apply(lambda x: f"${x:.2f}")
+        formatted_df['Exp Date'] = display_data['exp_date']
+        formatted_df['Strike'] = display_data['strike'].apply(lambda x: f"${x:.2f}")
         
-        # Create styler for the data
-        df_display = display_data.copy()
-        
-        # Define style functions for coloring
-        def color_moneyness(val):
+        # Create colored moneyness column
+        def format_moneyness(val):
             color = 'red' if val < 0 else 'green'
-            return f'color: {color}'
+            return f'<span style="color:{color}">{val:.2f}%</span>'
         
-        def color_net_profit(val):
+        formatted_df['Moneyness'] = display_data['moneyness'].apply(format_moneyness)
+        
+        # Continue formatting other columns
+        formatted_df['Bid'] = display_data['bid'].apply(lambda x: f"${x:.2f}")
+        
+        # Create colored net profit column
+        def format_net_profit(val):
             color = 'red' if val < 0 else 'green'
-            return f'color: {color}'
+            return f'<span style="color:{color}">${val:.2f}</span>'
         
-        # Set custom column names
-        df_display.columns = [
-            'Symbol', 'Price', 'Exp Date', 'Strike', 'Moneyness', 'Bid', 
-            'Net Profit', 'BE (Bid)', 'BE%', 'Volume', 'Open Int', 
-            'IV', 'Delta', 'OTM Prob', 'Ptnl Rtn', 'Ann Rtn', 'Last Trade'
-        ]
+        formatted_df['Net Profit'] = display_data['net_profit'].apply(format_net_profit)
         
-        # Convert numeric columns for better display
-        df_display['Price'] = df_display['Price'].map('${:.2f}'.format)
-        df_display['Strike'] = df_display['Strike'].map('${:.2f}'.format)
-        df_display['Bid'] = df_display['Bid'].map('${:.2f}'.format)
-        df_display['Net Profit'] = df_display['Net Profit'].map('${:.2f}'.format)
-        df_display['BE (Bid)'] = df_display['BE (Bid)'].map('${:.2f}'.format)
-        df_display['BE%'] = df_display['BE%'].map('{:.2f}%'.format)
-        df_display['IV'] = df_display['IV'].map('{:.2f}%'.format)
-        df_display['Delta'] = df_display['Delta'].map('{:.4f}'.format)
-        df_display['OTM Prob'] = df_display['OTM Prob'].map('{:.2f}%'.format)
-        df_display['Ptnl Rtn'] = df_display['Ptnl Rtn'].map('{:.1f}%'.format)
-        df_display['Ann Rtn'] = df_display['Ann Rtn'].map('{:.1f}%'.format)
+        # Continue with other columns
+        formatted_df['BE (Bid)'] = display_data['be_bid'].apply(lambda x: f"${x:.2f}")
+        formatted_df['BE%'] = display_data['be_pct'].apply(lambda x: f"{x:.2f}%")
+        formatted_df['Volume'] = display_data['volume'].apply(lambda x: f"{x:,}")
+        formatted_df['Open Int'] = display_data['open_int'].apply(lambda x: f"{x:,}")
+        formatted_df['IV'] = display_data['iv_pct'].apply(lambda x: f"{x:.2f}%")
+        formatted_df['Delta'] = display_data['delta'].apply(lambda x: f"{x:.4f}")
+        formatted_df['OTM Prob'] = display_data['otm_prob'].apply(lambda x: f"{x:.2f}%")
+        formatted_df['Ptnl Rtn'] = display_data['pnl_rtn'].apply(lambda x: f"{x:.1f}%")
+        formatted_df['Ann Rtn'] = display_data['ann_rtn'].apply(lambda x: f"{x:.1f}%")
+        formatted_df['Last Trade'] = display_data['last_trade']
         
         # Display the table
         st.subheader(f"{'Covered Call' if result_type == 'covered_call' else 'Cash-Secured Put'} Opportunities")
         
-        # Use native Streamlit dataframe with dark mode
-        st.dataframe(
-            df_display,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Moneyness": st.column_config.TextColumn(
-                    help="Percentage distance from current price",
-                ),
-                "Net Profit": st.column_config.TextColumn(
-                    help="Net profit for 1 contract",
-                ),
-            }
-        )
+        # Use HTML to render the formatted table with colors
+        st.write(formatted_df.to_html(escape=False, index=False), unsafe_allow_html=True)
         
-        # Offer download button for the formatted data
-        csv = formatted_data.to_csv(index=False).encode('utf-8')
+        # Offer download button for the data
+        csv = display_data.to_csv(index=False).encode('utf-8')
         st.download_button(
             label="Download results as CSV",
             data=csv,
