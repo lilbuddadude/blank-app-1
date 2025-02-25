@@ -526,56 +526,58 @@ if 'scan_results' in st.session_state and st.session_state.scan_results is not N
         
         # Common columns for both strategies (Barchart-style)
         display_columns = [
-            'symbol', 'price', 'exp_date', 'strike', 'moneyness', 'bid', 
+            'symbol', 'price', 'exp_date', 'strike', 'moneyness', 'bid','net_profit', 
             'be_bid', 'be_pct', 'volume', 'open_int', 'iv_pct', 'delta', 
-            'otm_prob', 'net_profit', 'pnl_rtn', 'ann_rtn', 'last_trade'
+            'otm_prob', 'pnl_rtn', 'ann_rtn', 'last_trade'
         ]
         
         display_headers = [
-            'Symbol', 'Price', 'Exp Date', 'Strike', 'Moneyness', 'Bid', 
+            'Symbol', 'Price', 'Exp Date', 'Strike', 'Moneyness', 'Bid', 'net_profit', 
             'BE (Bid)', 'BE%', 'Volume', 'Open Int', 'IV', 'Delta', 
-            'OTM Prob', 'Net Profit', 'Ptnl Rtn', 'Ann Rtn', 'Last Trade'
+            'OTM Prob', 'Ptnl Rtn', 'Ann Rtn', 'Last Trade'
         ]
         
         # Select only the columns we want to display
         display_data = results[display_columns].copy()
         
         # Apply custom CSS for table styling and colored cells
-        st.markdown("""
+       st.markdown("""
         <style>
         table.dataframe {
             border-collapse: collapse;
             border: none;
             font-size: 0.9em;
             width: 100%;
+            background-color: #1e1e1e;
+            color: #e0e0e0;
         }
         table.dataframe th {
-            background-color: #4a4a4a;
-            color: white;
+            background-color: #333333;
+            color: #f0f0f0;
             font-weight: bold;
             text-align: center;
             padding: 10px;
-            border: 1px solid #666;
+            border: 1px solid #555;
         }
         table.dataframe td {
             text-align: right;
             padding: 8px;
-            border: 1px solid #ddd;
-            background-color: #f4f4f4;
-            color: #333;
+            border: 1px solid #444;
+            background-color: #2a2a2a;
+            color: #e0e0e0;
         }
         table.dataframe tr:nth-child(even) td {
-            background-color: #e9e9e9;
+            background-color: #262626;
         }
         table.dataframe tr:hover td {
-            background-color: #d0d0d0;
+            background-color: #3a3a3a;
         }
         .positive {
-            color: darkgreen;
+            color: #4dff4d;
             font-weight: bold;
         }
         .negative {
-            color: darkred;
+            color: #ff4d4d;
             font-weight: bold;
         }
         </style>
