@@ -1,7 +1,9 @@
 streamlit
+
 python-dotenv==1.0.0  # Add this line to your requirements.txt
 streamlit==1.31.0
 # ... other dependencies
+
 git add requirements.txt
 git commit -m "Add python-dotenv to requirements"
 git push
