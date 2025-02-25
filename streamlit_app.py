@@ -325,7 +325,7 @@ def run_scan(strategy, symbols, filters):
             strategy, 
             filters
         )
-         all_results.extend(results)
+        all_results.extend(results)
         time.sleep(0.1)  # Small delay to simulate API call
     
     # Clear progress indicators
