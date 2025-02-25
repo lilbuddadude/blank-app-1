@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.express as px
 from datetime import datetime, timedelta
 import time
 
@@ -21,8 +20,8 @@ st.title("Options Arbitrage Scanner")
 st.write("Scan for profitable covered call and cash-secured put opportunities")
 
 # Simple mock data generator
-def generate_option_data(symbol, strategy_type, min_return, max_days, safety_margin=0.01, min_otm=0.05):
-    """Generate simulated option data for testing"""
+def generate_option_data(symbol, strategy_type, filters):
+    """Generate simulated option data for testing based on filters"""
     np.random.seed(hash(symbol) % 100)  # Use symbol as seed for consistent results
     
     # Stock price lookup table
@@ -36,103 +35,218 @@ def generate_option_data(symbol, strategy_type, min_return, max_days, safety_mar
         "NVDA": 842.32,
         "AMD": 174.49,
         "INTC": 43.15,
-        "NFLX": 625.40
+        "NFLX": 625.40,
+        "DIS": 114.75,
+        "BA": 178.22,
+        "JPM": 195.24,
+        "V": 280.85,
+        "MA": 465.37,
+        "PFE": 27.55,
+        "JNJ": 151.75,
+        "WMT": 59.96,
+        "HD": 353.48,
+        "COST": 731.98
     }
     
     # Use lookup price or generate random
     if symbol in prices:
-        stock_price = prices[symbol]
+        base_stock_price = prices[symbol]
     else:
-        stock_price = np.random.uniform(50, 500)
+        base_stock_price = np.random.uniform(50, 500)
+        
+    # Add slight variance to stock price (±1%)
+    stock_price = base_stock_price * (1 + np.random.uniform(-0.01, 0.01))
+    
+    # Check if the stock price meets our filter criteria
+    if filters.get('min_stock_price') and stock_price < filters['min_stock_price']:
+        return []
+    if filters.get('max_stock_price') and stock_price > filters['max_stock_price']:
+        return []
     
     # Generate random results
     results = []
     today = datetime.now()
     
-    # Number of results to generate
-    num_results = np.random.randint(0, 5)
+    # Generate expiration dates (next few weeks/months)
+    expiry_dates = []
     
-    for _ in range(num_results):
-        days_to_expiry = np.random.randint(5, max_days)
-        expiry_date = (today + timedelta(days=days_to_expiry)).strftime("%Y-%m-%d")
+    # Weekly expirations (next 8 weeks)
+    for i in range(1, 9):
+        # Get next Friday
+        days_to_friday = (4 - today.weekday()) % 7  # 4 is Friday
+        next_friday = today + timedelta(days=days_to_friday + (i-1)*7)
+        expiry_dates.append((next_friday, (next_friday - today).days))
+    
+    # Monthly expirations (next 6 months)
+    for i in range(1, 7):
+        # Get expiration for next month
+        next_month = today.replace(month=((today.month - 1 + i) % 12) + 1)
+        if next_month.month < today.month:
+            next_month = next_month.replace(year=next_month.year + 1)
+        # Third Friday of the month
+        day_of_week = next_month.replace(day=1).weekday()
+        third_friday = next_month.replace(day=1 + ((4 - day_of_week) % 7) + 14)
+        expiry_dates.append((third_friday, (third_friday - today).days))
+    
+    # Generate strikes around current price
+    strikes = []
+    # For ITM options (covered calls)
+    for pct in [0.7, 0.75, 0.8, 0.85, 0.9, 0.92, 0.94, 0.96, 0.98, 0.99]:
+        strikes.append(round(stock_price * pct, 1))
+    # For ATM options
+    strikes.append(round(stock_price, 1))
+    # For OTM options (cash-secured puts)
+    for pct in [1.01, 1.02, 1.03, 1.05, 1.07, 1.1, 1.15, 1.2, 1.25, 1.3]:
+        strikes.append(round(stock_price * pct, 1))
+    
+    # Process each expiration date
+    for expiry_date, days_to_expiry in expiry_dates:
+        # Skip if doesn't meet expiration filter criteria
+        if filters.get('min_days') and days_to_expiry < filters['min_days']:
+            continue
+        if filters.get('max_days') and days_to_expiry > filters['max_days']:
+            continue
+            
+        expiry_str = expiry_date.strftime("%Y-%m-%d")
         
-        if strategy_type == "covered_call":
-            # Generate ITM strike price
-            strike = stock_price * np.random.uniform(0.8, 0.98)
+        # Process each strike price
+        for strike in strikes:
+            # Skip if doesn't meet strike filter criteria
+            if filters.get('min_strike') and strike < filters['min_strike']:
+                continue
+            if filters.get('max_strike') and strike > filters['max_strike']:
+                continue
             
-            # Generate call price
-            intrinsic = stock_price - strike
-            time_value = stock_price * 0.01 * (days_to_expiry/30)
-            call_price = intrinsic + time_value
+            # Calculate implied volatility (realistic for the stock)
+            base_iv = 0.25  # Base IV of 25%
             
-            # Calculate metrics
-            net_debit = stock_price * (1 + safety_margin) - call_price
-            profit = strike - net_debit
-            ret = profit / net_debit
-            annual_ret = ret * (365 / days_to_expiry)
+            # Add variance based on stock (some stocks are more volatile)
+            volatile_stocks = ['TSLA', 'NVDA', 'AMD', 'ROKU', 'GME', 'AMC']
+            if symbol in volatile_stocks:
+                base_iv += 0.15  # Add 15% for volatile stocks
             
-            # Only include if meets minimum return
-            if annual_ret >= min_return and net_debit < strike:
-                downside_protection = (stock_price - net_debit) / stock_price
+            # Add variance based on days to expiry (more time = more uncertainty)
+            iv_time_factor = min(0.2, days_to_expiry / 365)  # Max 20% additional IV
+            
+            # Add variance based on strike distance from current price
+            strike_distance = abs(strike - stock_price) / stock_price
+            iv_strike_factor = min(0.2, strike_distance * 2)  # Max 20% additional IV
+            
+            # Final IV calculation
+            iv = base_iv + iv_time_factor + iv_strike_factor
+            iv = max(0.1, min(0.9, iv))  # Cap between 10% and 90%
+            
+            # Skip if IV doesn't meet filter criteria
+            if filters.get('min_iv') and iv < filters['min_iv']:
+                continue
+            if filters.get('max_iv') and iv > filters['max_iv']:
+                continue
+            
+            if strategy_type == "covered_call":
+                # Only process strikes below current price (ITM) for covered calls
+                if strike >= stock_price:
+                    continue
                 
-                results.append({
-                    "symbol": symbol,
-                    "stock_price": stock_price,
-                    "strike": strike,
-                    "expiration_date": expiry_date,
-                    "days_to_expiry": days_to_expiry,
-                    "call_price": call_price,
-                    "net_debit": net_debit,
-                    "profit": profit,
-                    "return": ret,
-                    "annualized_return": annual_ret,
-                    "implied_volatility": np.random.uniform(0.2, 0.6),
-                    "downside_protection": downside_protection,
-                    "volume": np.random.randint(100, 2000),
-                    "open_interest": np.random.randint(500, 5000)
-                })
-        else:  # cash-secured put
-            # Generate OTM strike price
-            otm_factor = np.random.uniform(min_otm, min_otm + 0.2)
-            strike = stock_price * (1 - otm_factor)
-            
-            # Generate put price
-            put_price = stock_price * 0.01 * (days_to_expiry/30) * (1 + otm_factor)
-            
-            # Calculate metrics
-            cash_required = strike * 100
-            premium = put_price * 100
-            ret = premium / cash_required
-            annual_ret = ret * (365 / days_to_expiry)
-            
-            # Only include if meets minimum return
-            if annual_ret >= min_return:
-                effective_cost_basis = strike - put_price
-                discount_to_current = (stock_price - effective_cost_basis) / stock_price
+                # Generate call price
+                intrinsic = stock_price - strike
+                time_value = stock_price * iv * np.sqrt(days_to_expiry/365) / 10
+                call_price = intrinsic + time_value
                 
-                results.append({
-                    "symbol": symbol,
-                    "stock_price": stock_price,
-                    "strike": strike,
-                    "expiration_date": expiry_date,
-                    "days_to_expiry": days_to_expiry,
-                    "put_price": put_price,
-                    "premium": premium,
-                    "cash_required": cash_required,
-                    "return": ret,
-                    "annualized_return": annual_ret,
-                    "implied_volatility": np.random.uniform(0.2, 0.6),
-                    "distance_from_current": otm_factor,
-                    "effective_cost_basis": effective_cost_basis,
-                    "discount_to_current": discount_to_current,
-                    "volume": np.random.randint(100, 2000),
-                    "open_interest": np.random.randint(500, 5000)
-                })
+                # Calculate metrics
+                net_debit = stock_price * (1 + filters.get('safety_margin', 0)) - call_price
+                profit = strike - net_debit
+                ret = profit / net_debit
+                annual_ret = ret * (365 / days_to_expiry)
+                
+                # Only include if meets minimum return
+                if annual_ret >= filters.get('min_return', 0) and net_debit < strike:
+                    downside_protection = (stock_price - net_debit) / stock_price
+                    
+                    # Skip if doesn't meet downside protection criteria
+                    if filters.get('min_downside') and downside_protection < filters['min_downside']:
+                        continue
+                    
+                    # Calculate volume and open interest (higher for near-term and near-the-money)
+                    atm_factor = 1 - min(0.8, abs(strike - stock_price) / stock_price)
+                    time_factor = 1 - min(0.8, days_to_expiry / 300)
+                    liquidity_factor = atm_factor * time_factor
+                    
+                    volume = int(2000 * liquidity_factor)
+                    open_interest = int(10000 * liquidity_factor)
+                    
+                    results.append({
+                        "symbol": symbol,
+                        "stock_price": stock_price,
+                        "strike": strike,
+                        "expiration_date": expiry_str,
+                        "days_to_expiry": days_to_expiry,
+                        "call_price": call_price,
+                        "net_debit": net_debit,
+                        "profit": profit,
+                        "return": ret,
+                        "annualized_return": annual_ret,
+                        "implied_volatility": iv,
+                        "downside_protection": downside_protection,
+                        "volume": volume,
+                        "open_interest": open_interest
+                    })
+            else:  # cash-secured put
+                # Only process strikes below current price (OTM) for cash-secured puts
+                if strike > stock_price:
+                    continue
+                
+                # Calculate how far OTM
+                otm_percentage = (stock_price - strike) / stock_price
+                
+                # Skip if doesn't meet OTM criteria
+                if filters.get('min_otm') and otm_percentage < filters['min_otm']:
+                    continue
+                
+                # Generate put price based on time value and IV
+                put_price = stock_price * iv * np.sqrt(days_to_expiry/365) / 10
+                
+                # Calculate metrics
+                cash_required = strike * 100  # Per contract
+                premium = put_price * 100  # Per contract
+                ret = premium / cash_required
+                annual_ret = ret * (365 / days_to_expiry)
+                
+                # Only include if meets minimum return
+                if annual_ret >= filters.get('min_return', 0):
+                    effective_cost_basis = strike - put_price
+                    discount_to_current = (stock_price - effective_cost_basis) / stock_price
+                    
+                    # Calculate volume and open interest (higher for near-term and near-the-money)
+                    atm_factor = 1 - min(0.8, abs(strike - stock_price) / stock_price)
+                    time_factor = 1 - min(0.8, days_to_expiry / 300)
+                    liquidity_factor = atm_factor * time_factor
+                    
+                    volume = int(2000 * liquidity_factor)
+                    open_interest = int(10000 * liquidity_factor)
+                    
+                    results.append({
+                        "symbol": symbol,
+                        "stock_price": stock_price,
+                        "strike": strike,
+                        "expiration_date": expiry_str,
+                        "days_to_expiry": days_to_expiry,
+                        "put_price": put_price,
+                        "premium": premium,
+                        "cash_required": cash_required,
+                        "return": ret,
+                        "annualized_return": annual_ret,
+                        "implied_volatility": iv,
+                        "distance_from_current": otm_percentage,
+                        "effective_cost_basis": effective_cost_basis,
+                        "discount_to_current": discount_to_current,
+                        "volume": volume,
+                        "open_interest": open_interest
+                    })
     
     return results
 
 # Run scan function
-def run_scan(strategy, symbols, min_return, max_days, safety_margin=0.01, min_otm=0.05):
+def run_scan(strategy, symbols, filters):
     """Run a scan for option opportunities"""
     all_results = []
     
@@ -150,10 +264,7 @@ def run_scan(strategy, symbols, min_return, max_days, safety_margin=0.01, min_ot
         results = generate_option_data(
             symbol, 
             strategy, 
-            min_return, 
-            max_days, 
-            safety_margin, 
-            min_otm
+            filters
         )
         
         all_results.extend(results)
@@ -186,50 +297,9 @@ with st.sidebar:
         index=0
     )
     
-    st.divider()
-    
-    # Common settings
-    st.subheader("Filter Settings")
-    
-    min_return = st.slider(
-        "Min Annual Return",
-        min_value=0.05,
-        max_value=1.0,
-        value=0.15,
-        step=0.05,
-        format="%.2f"
-    )
-    
-    max_days = st.slider(
-        "Max Days to Expiry",
-        min_value=1,
-        max_value=90,
-        value=45
-    )
-    
-    # Strategy-specific settings
-    if strategy == "Covered Calls":
-        safety_margin = st.slider(
-            "Safety Margin",
-            min_value=0.0,
-            max_value=0.05,
-            value=0.01,
-            step=0.005,
-            format="%.3f",
-            help="Additional margin added to stock price to account for execution risk"
-        )
-    else:  # Cash-Secured Puts
-        min_otm = st.slider(
-            "Min OTM Percentage",
-            min_value=0.0,
-            max_value=0.3,
-            value=0.05,
-            step=0.01,
-            format="%.2f",
-            help="Minimum percentage out-of-the-money for puts"
-        )
-    
     # Symbol selection
+    st.subheader("Symbol Selection")
+    
     symbol_option = st.radio(
         "Symbol Selection",
         ["Common Stocks", "Custom Symbols"],
@@ -241,6 +311,7 @@ with st.sidebar:
             "AAPL", "MSFT", "AMZN", "GOOGL", "META", 
             "TSLA", "NVDA", "AMD", "INTC", "NFLX"
         ]
+        st.write(f"Selected: {', '.join(selected_symbols)}")
     else:
         symbols_input = st.text_input(
             "Enter Symbols (comma separated)",
@@ -248,28 +319,130 @@ with st.sidebar:
         )
         selected_symbols = [s.strip().upper() for s in symbols_input.split(",") if s.strip()]
     
+    # Tabs for different filter categories
+    filter_tabs = st.tabs(["Returns", "Stock", "Option", "IV"])
+    
+    with filter_tabs[0]:  # Returns tab
+        st.subheader("Return Filters")
+        
+        min_return = st.slider(
+            "Min Annual Return",
+            min_value=0.05,
+            max_value=1.0,
+            value=0.15,
+            step=0.05,
+            format="%.2f"
+        )
+        
+        if strategy == "Covered Calls":
+            min_downside = st.slider(
+                "Min Downside Protection",
+                min_value=0.0,
+                max_value=0.3,
+                value=0.05,
+                step=0.01,
+                format="%.2f",
+                help="Minimum percentage of downside protection"
+            )
+            
+            safety_margin = st.slider(
+                "Safety Margin",
+                min_value=0.0,
+                max_value=0.05,
+                value=0.01,
+                step=0.005,
+                format="%.3f",
+                help="Additional margin added to stock price for safety"
+            )
+        else:  # Cash-Secured Puts
+            min_otm = st.slider(
+                "Min OTM Percentage",
+                min_value=0.0,
+                max_value=0.3,
+                value=0.05,
+                step=0.01,
+                format="%.2f",
+                help="Minimum percentage out-of-the-money for puts"
+            )
+    
+    with filter_tabs[1]:  # Stock tab
+        st.subheader("Stock Filters")
+        
+        # Stock price range
+        min_stock_price, max_stock_price = st.slider(
+            "Stock Price Range ($)",
+            min_value=0,
+            max_value=1000,
+            value=(0, 1000),
+            step=10
+        )
+    
+    with filter_tabs[2]:  # Option tab
+        st.subheader("Option Filters")
+        
+        # Strike price range
+        min_strike, max_strike = st.slider(
+            "Strike Price Range ($)",
+            min_value=0,
+            max_value=1000,
+            value=(0, 1000),
+            step=10
+        )
+        
+        # Days to expiry range
+        min_days, max_days = st.slider(
+            "Days to Expiry Range",
+            min_value=0,
+            max_value=180,
+            value=(0, 45),
+            step=1
+        )
+    
+    with filter_tabs[3]:  # IV tab
+        st.subheader("IV Filters")
+        
+        # Implied Volatility range
+        min_iv, max_iv = st.slider(
+            "Implied Volatility Range",
+            min_value=0.0,
+            max_value=2.0,
+            value=(0.0, 1.0),
+            step=0.05,
+            format="%.2f"
+        )
+    
     # Scan button
     scan_button = st.button("Scan for Opportunities", type="primary", use_container_width=True)
 
 # Trigger scan when button is clicked
 if scan_button:
     with st.spinner("Running scan..."):
+        # Build filters dictionary
+        filters = {
+            'min_return': min_return,
+            'min_days': min_days,
+            'max_days': max_days,
+            'min_stock_price': min_stock_price if min_stock_price > 0 else None,
+            'max_stock_price': max_stock_price if max_stock_price < 1000 else None,
+            'min_strike': min_strike if min_strike > 0 else None,
+            'max_strike': max_strike if max_strike < 1000 else None,
+            'min_iv': min_iv if min_iv > 0 else None,
+            'max_iv': max_iv if max_iv < 1.0 else None
+        }
+        
+        # Add strategy-specific filters
         if strategy == "Covered Calls":
-            results = run_scan(
-                strategy="covered_call",
-                symbols=selected_symbols,
-                min_return=min_return,
-                max_days=max_days,
-                safety_margin=safety_margin
-            )
+            filters['safety_margin'] = safety_margin
+            filters['min_downside'] = min_downside
         else:  # Cash-Secured Puts
-            results = run_scan(
-                strategy="cash_secured_put",
-                symbols=selected_symbols,
-                min_return=min_return,
-                max_days=max_days,
-                min_otm=min_otm
-            )
+            filters['min_otm'] = min_otm
+        
+        # Run the scan
+        results = run_scan(
+            strategy="covered_call" if strategy == "Covered Calls" else "cash_secured_put",
+            symbols=selected_symbols,
+            filters=filters
+        )
         
         # Save results to session state
         st.session_state.scan_results = {
@@ -307,51 +480,6 @@ if 'scan_results' in st.session_state and st.session_state.scan_results is not N
             st.subheader("Covered Call Opportunities")
             st.dataframe(display_data, use_container_width=True)
             
-            # Data visualizations
-            if len(results) > 1:
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    # Return vs days to expiry
-                    fig = px.scatter(
-                        results, 
-                        x="days_to_expiry", 
-                        y="annualized_return",
-                        color="annualized_return",
-                        size="profit",
-                        hover_name="symbol",
-                        title="Return vs. Days to Expiry"
-                    )
-                    
-                    fig.update_layout(
-                        xaxis_title="Days to Expiry",
-                        yaxis_title="Annual Return",
-                        yaxis_tickformat=".0%"
-                    )
-                    
-                    st.plotly_chart(fig, use_container_width=True)
-                
-                with col2:
-                    # Downside protection vs return
-                    fig = px.scatter(
-                        results, 
-                        x="downside_protection", 
-                        y="annualized_return",
-                        color="days_to_expiry",
-                        size="profit",
-                        hover_name="symbol",
-                        title="Downside Protection vs. Return"
-                    )
-                    
-                    fig.update_layout(
-                        xaxis_title="Downside Protection",
-                        yaxis_title="Annual Return",
-                        xaxis_tickformat=".0%",
-                        yaxis_tickformat=".0%"
-                    )
-                    
-                    st.plotly_chart(fig, use_container_width=True)
-                    
         else:  # cash_secured_put
             # Format display data
             display_data = results.copy()
@@ -374,50 +502,6 @@ if 'scan_results' in st.session_state and st.session_state.scan_results is not N
             st.subheader("Cash-Secured Put Opportunities")
             st.dataframe(display_data, use_container_width=True)
             
-            # Data visualizations
-            if len(results) > 1:
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    # Return vs OTM percentage
-                    fig = px.scatter(
-                        results, 
-                        x="distance_from_current", 
-                        y="annualized_return",
-                        color="days_to_expiry",
-                        size="premium",
-                        hover_name="symbol",
-                        title="Return vs. OTM Distance"
-                    )
-                    
-                    fig.update_layout(
-                        xaxis_title="OTM Distance",
-                        yaxis_title="Annual Return",
-                        xaxis_tickformat=".0%",
-                        yaxis_tickformat=".0%"
-                    )
-                    
-                    st.plotly_chart(fig, use_container_width=True)
-                
-                with col2:
-                    # Return vs days to expiry
-                    fig = px.scatter(
-                        results, 
-                        x="days_to_expiry", 
-                        y="annualized_return",
-                        color="distance_from_current",
-                        size="premium",
-                        hover_name="symbol",
-                        title="Return by Days to Expiry"
-                    )
-                    
-                    fig.update_layout(
-                        xaxis_title="Days to Expiry",
-                        yaxis_title="Annual Return",
-                        yaxis_tickformat=".0%"
-                    )
-                    
-                    st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("No opportunities found matching your criteria. Try adjusting your filter settings.")
 else:
