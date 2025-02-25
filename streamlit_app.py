@@ -180,9 +180,8 @@ def generate_option_data(symbol, strategy_type, filters):
                 # Calculate potential return
                 potential_return = bid_price / stock_price * 100
                 
-                # Calculate net profit (new column)
-                # net profit = (100 x current stock price) - (100 x strike price) + option price x 100
-                net_profit = (100 * stock_price) - (100 * strike) + (bid_price * 100)
+                # NEW NET PROFIT CALCULATION
+                net_profit = (bid_price * 100) - ((100 * stock_price) - (100 * strike))
                 
                 # Only include if meets minimum return criteria
                 if annual_ret >= filters.get('min_return', 0) and net_debit < strike:
@@ -267,10 +266,8 @@ def generate_option_data(symbol, strategy_type, filters):
                 # Calculate potential return
                 potential_return = bid_price / stock_price * 100
                 
-                # Calculate net profit (new column)
-                # net profit = (100 x strike price) - (100 x current stock price) + option price x 100
-                # For puts, it's the inverse of calls
-                net_profit = (100 * strike) - (100 * stock_price) + (bid_price * 100)
+                # NEW NET PROFIT CALCULATION
+                net_profit = (bid_price * 100) - ((100 * strike) - (100 * stock_price))
                 
                 # Only include if meets minimum return
                 if annual_ret >= filters.get('min_return', 0):
@@ -328,8 +325,7 @@ def run_scan(strategy, symbols, filters):
             strategy, 
             filters
         )
-        
-        all_results.extend(results)
+         all_results.extend(results)
         time.sleep(0.1)  # Small delay to simulate API call
     
     # Clear progress indicators
@@ -526,79 +522,15 @@ if 'scan_results' in st.session_state and st.session_state.scan_results is not N
         
         # Common columns for both strategies (Barchart-style)
         display_columns = [
-            'symbol', 'price', 'exp_date', 'strike', 'moneyness', 'bid','net_profit', 
-            'be_bid', 'be_pct', 'volume', 'open_int', 'iv_pct', 'delta', 
+            'symbol', 'price', 'exp_date', 'strike', 'moneyness', 'bid', 
+            'net_profit', 'be_bid', 'be_pct', 'volume', 'open_int', 'iv_pct', 'delta', 
             'otm_prob', 'pnl_rtn', 'ann_rtn', 'last_trade'
         ]
         
-        display_headers = [
-            'Symbol', 'Price', 'Exp Date', 'Strike', 'Moneyness', 'Bid', 'net_profit', 
-            'BE (Bid)', 'BE%', 'Volume', 'Open Int', 'IV', 'Delta', 
-            'OTM Prob', 'Ptnl Rtn', 'Ann Rtn', 'Last Trade'
-        ]
-        
-        # Select only the columns we want to display
+        # Prepare the display data with correct formatting
         display_data = results[display_columns].copy()
         
-        # Apply custom CSS for table styling and colored cells
-        st.markdown("""
-        <style>
-        table.dataframe {
-            border-collapse: collapse;
-            border: none;
-            font-size: 0.9em;
-            width: 100%;
-            background-color: #1e1e1e;
-            color: #e0e0e0;
-        }
-        table.dataframe th {
-            background-color: #333333;
-            color: #f0f0f0;
-            font-weight: bold;
-            text-align: center;
-            padding: 10px;
-            border: 1px solid #555;
-        }
-        table.dataframe td {
-            text-align: right;
-            padding: 8px;
-            border: 1px solid #444;
-            background-color: #2a2a2a;
-            color: #e0e0e0;
-        }
-        table.dataframe tr:nth-child(even) td {
-            background-color: #262626;
-        }
-        table.dataframe tr:hover td {
-            background-color: #3a3a3a;
-        }
-        .positive {
-            color: #4dff4d;
-            font-weight: bold;
-        }
-        .negative {
-            color: #ff4d4d;
-            font-weight: bold;
-        }
-        </style>
-        """, unsafe_allow_html=True)
-        
-        # Format the data with color coding
-        def format_moneyness(x):
-            value = float(x)
-            if value < 0:
-                return f"<span class='negative'>{value:.2f}%</span>"
-            else:
-                return f"<span class='positive'>{value:.2f}%</span>"
-        
-        def format_net_profit(x):
-            value = float(x)
-            if value < 0:
-                return f"<span class='negative'>${value:.2f}</span>"
-            else:
-                return f"<span class='positive'>${value:.2f}</span>"
-            
-        # Apply formatting to the data (converting to strings)
+        # Format columns consistently
         display_data['price'] = display_data['price'].apply(lambda x: f"${x:.2f}")
         display_data['strike'] = display_data['strike'].apply(lambda x: f"${x:.2f}")
         display_data['bid'] = display_data['bid'].apply(lambda x: f"${x:.2f}")
@@ -610,23 +542,43 @@ if 'scan_results' in st.session_state and st.session_state.scan_results is not N
         display_data['pnl_rtn'] = display_data['pnl_rtn'].apply(lambda x: f"{x:.1f}%")
         display_data['ann_rtn'] = display_data['ann_rtn'].apply(lambda x: f"{x:.1f}%")
         
-        # Special formatting for colored cells
-        moneyness_styled = display_data['moneyness'].apply(format_moneyness)
-        net_profit_styled = display_data['net_profit'].apply(format_net_profit)
+        # Create display DataFrame with headers
+        display_data.columns = ['Symbol', 'Price', 'Exp Date', 'Strike', 'Moneyness', 'Bid', 
+            'Net Profit', 'BE (Bid)', 'BE%', 'Volume', 'Open Int', 'IV', 'Delta', 
+            'OTM Prob', 'Ptnl Rtn', 'Ann Rtn', 'Last Trade']
         
-        # Create a copy for display with HTML formatting
-        display_html = display_data.copy()
-        display_html['moneyness'] = moneyness_styled
-        display_html['net_profit'] = net_profit_styled
-        
-        # Rename columns
-        display_html.columns = display_headers
-        
-        # Display table in a Barchart.com-like style with HTML formatting
-        st.subheader(f"{'Covered Call' if result_type == 'covered_call' else 'Cash-Secured Put'} Opportunities")
-        
-        # Display the dataframe with HTML formatting
-        st.write(display_html.to_html(escape=False, index=False), unsafe_allow_html=True)
+        # Use st.dataframe for interactive sorting
+        st.dataframe(
+            display_data, 
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Price": st.column_config.NumberColumn(
+                    "Price",
+                    format="$%.2f"
+                ),
+                "Bid": st.column_config.NumberColumn(
+                    "Bid",
+                    format="$%.2f"
+                ),
+                "Strike": st.column_config.NumberColumn(
+                    "Strike",
+                    format="$%.2f"
+                ),
+                "Net Profit": st.column_config.NumberColumn(
+                    "Net Profit",
+                    format="$%.2f"
+                ),
+                "Ann Rtn": st.column_config.NumberColumn(
+                    "Ann Rtn",
+                    format="%.1f%%"
+                ),
+                "Moneyness": st.column_config.NumberColumn(
+                    "Moneyness",
+                    format="%.2f%%"
+                )
+            }
+        )
         
         # Add a details section to show additional metrics
         with st.expander("Show Additional Metrics"):
