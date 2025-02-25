@@ -180,6 +180,10 @@ def generate_option_data(symbol, strategy_type, filters):
                 # Calculate potential return
                 potential_return = bid_price / stock_price * 100
                 
+                # Calculate net profit (new column)
+                # net profit = (100 x current stock price) - (100 x strike price) + option price x 100
+                net_profit = (100 * stock_price) - (100 * strike) + (bid_price * 100)
+                
                 # Only include if meets minimum return criteria
                 if annual_ret >= filters.get('min_return', 0) and net_debit < strike:
                     # Calculate downside protection
@@ -205,6 +209,7 @@ def generate_option_data(symbol, strategy_type, filters):
                         "otm_prob": otm_prob,
                         "pnl_rtn": potential_return,
                         "ann_rtn": annual_ret_pct,
+                        "net_profit": net_profit,
                         "net_debit": net_debit,
                         "profit": profit,
                         "return": ret,
@@ -262,6 +267,11 @@ def generate_option_data(symbol, strategy_type, filters):
                 # Calculate potential return
                 potential_return = bid_price / stock_price * 100
                 
+                # Calculate net profit (new column)
+                # net profit = (100 x strike price) - (100 x current stock price) + option price x 100
+                # For puts, it's the inverse of calls
+                net_profit = (100 * strike) - (100 * stock_price) + (bid_price * 100)
+                
                 # Only include if meets minimum return
                 if annual_ret >= filters.get('min_return', 0):
                     effective_cost_basis = strike - bid_price
@@ -283,6 +293,7 @@ def generate_option_data(symbol, strategy_type, filters):
                         "otm_prob": otm_prob,
                         "pnl_rtn": potential_return,
                         "ann_rtn": annual_ret_pct,
+                        "net_profit": net_profit,
                         "premium": premium,
                         "cash_required": cash_required,
                         "return": ret,
@@ -517,34 +528,19 @@ if 'scan_results' in st.session_state and st.session_state.scan_results is not N
         display_columns = [
             'symbol', 'price', 'exp_date', 'strike', 'moneyness', 'bid', 
             'be_bid', 'be_pct', 'volume', 'open_int', 'iv_pct', 'delta', 
-            'otm_prob', 'pnl_rtn', 'ann_rtn', 'last_trade'
+            'otm_prob', 'net_profit', 'pnl_rtn', 'ann_rtn', 'last_trade'
         ]
         
         display_headers = [
             'Symbol', 'Price', 'Exp Date', 'Strike', 'Moneyness', 'Bid', 
             'BE (Bid)', 'BE%', 'Volume', 'Open Int', 'IV', 'Delta', 
-            'OTM Prob', 'Ptnl Rtn', 'Ann Rtn', 'Last Trade'
+            'OTM Prob', 'Net Profit', 'Ptnl Rtn', 'Ann Rtn', 'Last Trade'
         ]
         
         # Select only the columns we want to display
         display_data = results[display_columns].copy()
         
-        # Format the data
-        display_data['moneyness'] = display_data['moneyness'].apply(lambda x: f"{x:.2f}%")
-        display_data['be_pct'] = display_data['be_pct'].apply(lambda x: f"{x:.2f}%")
-        display_data['iv_pct'] = display_data['iv_pct'].apply(lambda x: f"{x:.2f}%")
-        display_data['delta'] = display_data['delta'].apply(lambda x: f"{x:.4f}")
-        display_data['otm_prob'] = display_data['otm_prob'].apply(lambda x: f"{x:.2f}%")
-        display_data['pnl_rtn'] = display_data['pnl_rtn'].apply(lambda x: f"{x:.1f}%")
-        display_data['ann_rtn'] = display_data['ann_rtn'].apply(lambda x: f"{x:.1f}%")
-        
-        # Rename columns
-        display_data.columns = display_headers
-        
-        # Display table in a Barchart.com-like style
-        st.subheader(f"{'Covered Call' if result_type == 'covered_call' else 'Cash-Secured Put'} Opportunities")
-        
-        # Apply custom CSS for table styling
+        # Apply custom CSS for table styling and colored cells
         st.markdown("""
         <style>
         table.dataframe {
@@ -571,11 +567,59 @@ if 'scan_results' in st.session_state and st.session_state.scan_results is not N
         table.dataframe tr:hover {
             background-color: #f0f0f0;
         }
+        .positive {
+            color: green;
+        }
+        .negative {
+            color: red;
+        }
         </style>
         """, unsafe_allow_html=True)
         
-        # Display the dataframe
-        st.dataframe(display_data, use_container_width=True, hide_index=True)
+        # Format the data with color coding
+        def format_moneyness(x):
+            value = float(x)
+            if value < 0:
+                return f"<span class='negative'>{value:.2f}%</span>"
+            else:
+                return f"<span class='positive'>{value:.2f}%</span>"
+        
+        def format_net_profit(x):
+            value = float(x)
+            if value < 0:
+                return f"<span class='negative'>${value:.2f}</span>"
+            else:
+                return f"<span class='positive'>${value:.2f}</span>"
+            
+        # Apply formatting to the data (converting to strings)
+        display_data['price'] = display_data['price'].apply(lambda x: f"${x:.2f}")
+        display_data['strike'] = display_data['strike'].apply(lambda x: f"${x:.2f}")
+        display_data['bid'] = display_data['bid'].apply(lambda x: f"${x:.2f}")
+        display_data['be_bid'] = display_data['be_bid'].apply(lambda x: f"${x:.2f}")
+        display_data['be_pct'] = display_data['be_pct'].apply(lambda x: f"{x:.2f}%")
+        display_data['iv_pct'] = display_data['iv_pct'].apply(lambda x: f"{x:.2f}%")
+        display_data['delta'] = display_data['delta'].apply(lambda x: f"{x:.4f}")
+        display_data['otm_prob'] = display_data['otm_prob'].apply(lambda x: f"{x:.2f}%")
+        display_data['pnl_rtn'] = display_data['pnl_rtn'].apply(lambda x: f"{x:.1f}%")
+        display_data['ann_rtn'] = display_data['ann_rtn'].apply(lambda x: f"{x:.1f}%")
+        
+        # Special formatting for colored cells
+        moneyness_styled = display_data['moneyness'].apply(format_moneyness)
+        net_profit_styled = display_data['net_profit'].apply(format_net_profit)
+        
+        # Create a copy for display with HTML formatting
+        display_html = display_data.copy()
+        display_html['moneyness'] = moneyness_styled
+        display_html['net_profit'] = net_profit_styled
+        
+        # Rename columns
+        display_html.columns = display_headers
+        
+        # Display table in a Barchart.com-like style with HTML formatting
+        st.subheader(f"{'Covered Call' if result_type == 'covered_call' else 'Cash-Secured Put'} Opportunities")
+        
+        # Display the dataframe with HTML formatting
+        st.write(display_html.to_html(escape=False, index=False), unsafe_allow_html=True)
         
         # Add a details section to show additional metrics
         with st.expander("Show Additional Metrics"):
