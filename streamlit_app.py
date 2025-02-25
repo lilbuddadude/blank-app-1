@@ -754,14 +754,4 @@ def main():
                 'max_symbols': max_symbols
             }
             
-            # Scan button
-            scan_button = st.button("Scan for Opportunities", type="primary", use_container_width=True)
-            
-            if scan_button:
-                if selected_tab == "Covered Calls":
-                    results = st.session_state.scanner.find_covered_call_opportunities(
-                        min_return=min_return,
-                        max_days_to_expiry=max_days,
-                        safety_margin=safety_margin,
-                        symbols=selected_symbols,
-                        max_symbols=max_
+        
