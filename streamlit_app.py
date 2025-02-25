@@ -8,7 +8,8 @@ import time
 st.set_page_config(
     page_title="Options Scanner",
     page_icon="📈",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 # Initialize session state
@@ -540,56 +541,20 @@ if 'scan_results' in st.session_state and st.session_state.scan_results is not N
         # Select only the columns we want to display
         display_data = results[display_columns].copy()
         
-        # Apply custom CSS for table styling and colored cells
-        st.markdown("""
-        <style>
-        table.dataframe {
-            border-collapse: collapse;
-            border: none;
-            font-size: 0.9em;
-        }
-        table.dataframe th {
-            background-color: #f2f2f2;
-            color: #333;
-            font-weight: bold;
-            text-align: center;
-            padding: 8px;
-            border: 1px solid #ddd;
-        }
-        table.dataframe td {
-            text-align: right;
-            padding: 8px;
-            border: 1px solid #ddd;
-        }
-        table.dataframe tr:nth-child(even) {
-            background-color: #f9f9f9;
-        }
-        table.dataframe tr:hover {
-            background-color: #f0f0f0;
-        }
-        .positive {
-            color: green;
-        }
-        .negative {
-            color: red;
-        }
-        </style>
-        """, unsafe_allow_html=True)
-        
         # Format the data with color coding
         def format_moneyness(x):
             value = float(x)
             if value < 0:
-                return f"<span class='negative'>{value:.2f}%</span>"
+                return f"<span style='color:#FF4B4B;'>{value:.2f}%</span>"
             else:
-                return f"<span class='positive'>{value:.2f}%</span>"
+                return f"<span style='color:#4BC0C0;'>{value:.2f}%</span>"
         
         def format_net_profit(x):
             value = float(x)
             if value < 0:
-                return f"<span class='negative'>${value:.2f}</span>"
+                return f"<span style='color:#FF4B4B;'>${value:.2f}</span>"
             else:
-                return f"<span class='positive'>${value:.2f}</span>"
+                return f"<span style='color:#4BC0C0;'>${value:.2f}</span>"
             
         # Apply formatting to the data (converting to strings)
         display_data['price'] = display_data['price'].apply(lambda x: f"${x:.2f}")
@@ -615,11 +580,61 @@ if 'scan_results' in st.session_state and st.session_state.scan_results is not N
         # Rename columns
         display_html.columns = display_headers
         
-        # Display table in a Barchart.com-like style with HTML formatting
+        # Custom dark mode CSS for the table
+        st.markdown("""
+        <style>
+        .dark-mode-table {
+            background-color: #1E1E1E;
+            color: #E0E0E0;
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9em;
+            border-radius: 5px;
+            overflow: hidden;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.15);
+        }
+
+        .dark-mode-table thead tr {
+            background-color: #2C2C2C;
+            color: #E0E0E0;
+            text-align: left;
+            font-weight: bold;
+        }
+
+        .dark-mode-table th,
+        .dark-mode-table td {
+            padding: 12px 15px;
+            border-bottom: 1px solid #3A3A3A;
+            text-align: right;
+        }
+
+        .dark-mode-table tbody tr {
+            border-bottom: 1px solid #3A3A3A;
+        }
+
+        .dark-mode-table tbody tr:nth-of-type(even) {
+            background-color: #262626;
+        }
+
+        .dark-mode-table tbody tr:last-of-type {
+            border-bottom: 2px solid #3A3A3A;
+        }
+        
+        .dark-mode-table tbody tr:hover {
+            background-color: #333333;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        # Display table in a Barchart.com-like style with HTML formatting in dark mode
         st.subheader(f"{'Covered Call' if result_type == 'covered_call' else 'Cash-Secured Put'} Opportunities")
         
-        # Display the dataframe with HTML formatting
-        st.write(display_html.to_html(escape=False, index=False), unsafe_allow_html=True)
+        # Convert DataFrame to HTML and apply our dark mode class
+        html_table = display_html.to_html(escape=False, index=False)
+        html_table = html_table.replace('<table', '<table class="dark-mode-table"')
+        
+        # Display the dataframe with HTML formatting and dark mode
+        st.write(html_table, unsafe_allow_html=True)
         
         # Add a details section to show additional metrics
         with st.expander("Show Additional Metrics"):
