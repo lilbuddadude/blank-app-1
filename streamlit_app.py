@@ -547,31 +547,36 @@ if 'scan_results' in st.session_state and st.session_state.scan_results is not N
             border-collapse: collapse;
             border: none;
             font-size: 0.9em;
+            width: 100%;
         }
         table.dataframe th {
-            background-color: #f2f2f2;
-            color: #333;
+            background-color: #4a4a4a;
+            color: white;
             font-weight: bold;
             text-align: center;
-            padding: 8px;
-            border: 1px solid #ddd;
+            padding: 10px;
+            border: 1px solid #666;
         }
         table.dataframe td {
             text-align: right;
             padding: 8px;
             border: 1px solid #ddd;
+            background-color: #f4f4f4;
+            color: #333;
         }
-        table.dataframe tr:nth-child(even) {
-            background-color: #f9f9f9;
+        table.dataframe tr:nth-child(even) td {
+            background-color: #e9e9e9;
         }
-        table.dataframe tr:hover {
-            background-color: #f0f0f0;
+        table.dataframe tr:hover td {
+            background-color: #d0d0d0;
         }
         .positive {
-            color: green;
+            color: darkgreen;
+            font-weight: bold;
         }
         .negative {
-            color: red;
+            color: darkred;
+            font-weight: bold;
         }
         </style>
         """, unsafe_allow_html=True)
