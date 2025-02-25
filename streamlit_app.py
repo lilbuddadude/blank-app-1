@@ -180,8 +180,9 @@ def generate_option_data(symbol, strategy_type, filters):
                 # Calculate potential return
                 potential_return = bid_price / stock_price * 100
                 
-                # NEW NET PROFIT CALCULATION
-                net_profit = (bid_price * 100) - ((100 * stock_price) - (100 * strike))
+                # Calculate net profit (new column)
+                # net profit = (100 x current stock price) - (100 x strike price) + option price x 100
+                net_profit = (100 * stock_price) - (100 * strike) + (bid_price * 100)
                 
                 # Only include if meets minimum return criteria
                 if annual_ret >= filters.get('min_return', 0) and net_debit < strike:
@@ -266,8 +267,10 @@ def generate_option_data(symbol, strategy_type, filters):
                 # Calculate potential return
                 potential_return = bid_price / stock_price * 100
                 
-                # NEW NET PROFIT CALCULATION
-                net_profit = (bid_price * 100) - ((100 * strike) - (100 * stock_price))
+                # Calculate net profit (new column)
+                # net profit = (100 x strike price) - (100 x current stock price) + option price x 100
+                # For puts, it's the inverse of calls
+                net_profit = (100 * strike) - (100 * stock_price) + (bid_price * 100)
                 
                 # Only include if meets minimum return
                 if annual_ret >= filters.get('min_return', 0):
@@ -325,6 +328,7 @@ def run_scan(strategy, symbols, filters):
             strategy, 
             filters
         )
+        
         all_results.extend(results)
         time.sleep(0.1)  # Small delay to simulate API call
     
@@ -510,10 +514,84 @@ if scan_button:
             "timestamp": datetime.now()
         }
 
-        # Prepare the display data with correct formatting
+# Display scan results
+if 'scan_results' in st.session_state and st.session_state.scan_results is not None:
+    results = st.session_state.scan_results.get('data')
+    result_type = st.session_state.scan_results.get('type')
+    timestamp = st.session_state.scan_results.get('timestamp')
+    
+    # Show results summary
+    if not results.empty:
+        st.success(f"Found {len(results)} opportunities (Scan time: {timestamp.strftime('%I:%M:%S %p')})")
+        
+        # Common columns for both strategies (Barchart-style)
+        display_columns = [
+            'symbol', 'price', 'exp_date', 'strike', 'moneyness', 'bid', 
+            'be_bid', 'be_pct', 'volume', 'open_int', 'iv_pct', 'delta', 
+            'otm_prob', 'net_profit', 'pnl_rtn', 'ann_rtn', 'last_trade'
+        ]
+        
+        display_headers = [
+            'Symbol', 'Price', 'Exp Date', 'Strike', 'Moneyness', 'Bid', 
+            'BE (Bid)', 'BE%', 'Volume', 'Open Int', 'IV', 'Delta', 
+            'OTM Prob', 'Net Profit', 'Ptnl Rtn', 'Ann Rtn', 'Last Trade'
+        ]
+        
+        # Select only the columns we want to display
         display_data = results[display_columns].copy()
         
-        # Format columns consistently
+        # Apply custom CSS for table styling and colored cells
+        st.markdown("""
+        <style>
+        table.dataframe {
+            border-collapse: collapse;
+            border: none;
+            font-size: 0.9em;
+        }
+        table.dataframe th {
+            background-color: #f2f2f2;
+            color: #333;
+            font-weight: bold;
+            text-align: center;
+            padding: 8px;
+            border: 1px solid #ddd;
+        }
+        table.dataframe td {
+            text-align: right;
+            padding: 8px;
+            border: 1px solid #ddd;
+        }
+        table.dataframe tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        table.dataframe tr:hover {
+            background-color: #f0f0f0;
+        }
+        .positive {
+            color: green;
+        }
+        .negative {
+            color: red;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        # Format the data with color coding
+        def format_moneyness(x):
+            value = float(x)
+            if value < 0:
+                return f"<span class='negative'>{value:.2f}%</span>"
+            else:
+                return f"<span class='positive'>{value:.2f}%</span>"
+        
+        def format_net_profit(x):
+            value = float(x)
+            if value < 0:
+                return f"<span class='negative'>${value:.2f}</span>"
+            else:
+                return f"<span class='positive'>${value:.2f}</span>"
+            
+        # Apply formatting to the data (converting to strings)
         display_data['price'] = display_data['price'].apply(lambda x: f"${x:.2f}")
         display_data['strike'] = display_data['strike'].apply(lambda x: f"${x:.2f}")
         display_data['bid'] = display_data['bid'].apply(lambda x: f"${x:.2f}")
@@ -525,85 +603,72 @@ if scan_button:
         display_data['pnl_rtn'] = display_data['pnl_rtn'].apply(lambda x: f"{x:.1f}%")
         display_data['ann_rtn'] = display_data['ann_rtn'].apply(lambda x: f"{x:.1f}%")
         
-        # Create display DataFrame with headers
-        display_data.columns = ['Symbol', 'Price', 'Exp Date', 'Strike', 'Moneyness', 'Bid', 
-            'Net Profit', 'BE (Bid)', 'BE%', 'Volume', 'Open Int', 'IV', 'Delta', 
-            'OTM Prob', 'Ptnl Rtn', 'Ann Rtn', 'Last Trade']
+        # Special formatting for colored cells
+        moneyness_styled = display_data['moneyness'].apply(format_moneyness)
+        net_profit_styled = display_data['net_profit'].apply(format_net_profit)
         
-        # Prepare styled data with colored moneyness and net profit
-        def color_formatter(col_name):
-            def format_cell(x):
-                try:
-                    # Remove currency or percentage symbols for parsing
-                    value = float(x.replace('$', '').replace('%', ''))
-                    if value < 0:
-                        return f'<span style="color: red;">{x}</span>'
-                    else:
-                        return f'<span style="color: green;">{x}</span>'
-                except:
-                    return x
-            return format_cell
-
-        # Create a copy of the data for HTML formatting
+        # Create a copy for display with HTML formatting
         display_html = display_data.copy()
-        display_html['Moneyness'] = display_data['Moneyness'].apply(color_formatter('Moneyness'))
-        display_html['Net Profit'] = display_data['Net Profit'].apply(color_formatter('Net Profit'))
+        display_html['moneyness'] = moneyness_styled
+        display_html['net_profit'] = net_profit_styled
         
-        # Use st.dataframe for interactive sorting
-        st.dataframe(
-            display_data, 
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Price": st.column_config.NumberColumn(
-                    "Price",
-                    format="$%.2f"
-                ),
-                "Bid": st.column_config.NumberColumn(
-                    "Bid",
-                    format="$%.2f"
-                ),
-                "Strike": st.column_config.NumberColumn(
-                    "Strike",
-                    format="$%.2f"
-                ),
-                "Net Profit": st.column_config.NumberColumn(
-                    "Net Profit",
-                    format="$%.2f"
-                ),
-                "Ann Rtn": st.column_config.NumberColumn(
-                    "Ann Rtn",
-                    format="%.1f%%"
-                ),
-                "Moneyness": st.column_config.NumberColumn(
-                    "Moneyness",
-                    format="%.2f%%"
-                )
-            }
-        )
+        # Rename columns
+        display_html.columns = display_headers
         
-        # Display HTML-formatted table with colored cells
-st.markdown(display_html.to_html(escape=False, index=False), unsafe_allow_html=True)
-
-# Add a details section to show additional metrics
-with st.expander("Show Additional Metrics"):
-    if result_type == "covered_call":
-        # Format additional metrics for covered calls
-        additional_data = results[['symbol', 'net_debit', 'profit', 'return', 'downside_protection']].copy()
-        additional_data['return'] = additional_data['return'].apply(lambda x: f"{x:.2%}")
-        additional_data['downside_protection'] = additional_data['downside_protection'].apply(lambda x: f"{x:.2%}")
-        additional_data.columns = ['Symbol', 'Net Debit', 'Profit', 'Return', 'Downside Protection']
-    
-        st.dataframe(additional_data, use_container_width=True, hide_index=True)
+        # Display table in a Barchart.com-like style with HTML formatting
+        st.subheader(f"{'Covered Call' if result_type == 'covered_call' else 'Cash-Secured Put'} Opportunities")
+        
+        # Display the dataframe with HTML formatting
+        st.write(display_html.to_html(escape=False, index=False), unsafe_allow_html=True)
+        
+        # Add a details section to show additional metrics
+        with st.expander("Show Additional Metrics"):
+            if result_type == "covered_call":
+                # Format additional metrics for covered calls
+                additional_data = results[['symbol', 'net_debit', 'profit', 'return', 'downside_protection']].copy()
+                additional_data['return'] = additional_data['return'].apply(lambda x: f"{x:.2%}")
+                additional_data['downside_protection'] = additional_data['downside_protection'].apply(lambda x: f"{x:.2%}")
+                additional_data.columns = ['Symbol', 'Net Debit', 'Profit', 'Return', 'Downside Protection']
+                
+                st.dataframe(additional_data, use_container_width=True, hide_index=True)
+            else:
+                # Format additional metrics for cash-secured puts
+                additional_data = results[['symbol', 'premium', 'cash_required', 'return', 'effective_cost_basis', 'discount_to_current']].copy()
+                additional_data['return'] = additional_data['return'].apply(lambda x: f"{x:.2%}")
+                additional_data['discount_to_current'] = additional_data['discount_to_current'].apply(lambda x: f"{x:.2%}")
+                additional_data.columns = ['Symbol', 'Premium', 'Cash Required', 'Return', 'Effective Cost Basis', 'Discount to Current']
+                
+                st.dataframe(additional_data, use_container_width=True, hide_index=True)
     else:
-        # Format additional metrics for cash-secured puts
-        additional_data = results[['symbol', 'premium', 'cash_required', 'return', 'effective_cost_basis', 'discount_to_current']].copy()
-        additional_data['return'] = additional_data['return'].apply(lambda x: f"{x:.2%}")
-        additional_data['discount_to_current'] = additional_data['discount_to_current'].apply(lambda x: f"{x:.2%}")
-        additional_data.columns = ['Symbol', 'Premium', 'Cash Required', 'Return', 'Effective Cost Basis', 'Discount to Current']
-    
-        st.dataframe(additional_data, use_container_width=True, hide_index=True)
-
-# Remove the extra 'else' blocks
+        st.info("No opportunities found matching your criteria. Try adjusting your filter settings.")
 else:
-    st.info("No opportunities found matching your criteria. Try adjusting your filter settings.")
+    # Initial state - show instructions
+    st.info("Use the sidebar to configure and run a scan for option opportunities.")
+    
+    # Show example of what the app does
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Covered Call Arbitrage")
+        st.write("""
+        The scanner looks for covered call opportunities where buying the stock and 
+        immediately selling a call option creates an arbitrage situation (guaranteed profit).
+        
+        Key metrics analyzed:
+        - Net debit (stock price - call premium)
+        - Profit (strike price - net debit)
+        - Annualized return
+        - Downside protection
+        """)
+    
+    with col2:
+        st.subheader("Cash-Secured Puts")
+        st.write("""
+        The scanner finds attractive cash-secured put opportunities based on:
+        - Put option premium relative to cash required
+        - Annualized return
+        - Distance out-of-the-money
+        - Discount to current price if assigned
+        
+        This strategy is ideal for generating income or acquiring stocks at a discount.
+        """)
