@@ -12,9 +12,13 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Initialize session state
+# Initialize session state for sorting and results
 if 'scan_results' not in st.session_state:
     st.session_state.scan_results = None
+if 'sort_column' not in st.session_state:
+    st.session_state.sort_column = None
+if 'sort_ascending' not in st.session_state:
+    st.session_state.sort_ascending = True
 
 # Title and description
 st.title("Options Arbitrage Scanner")
@@ -209,6 +213,10 @@ if scan_button:
             "data": results,
             "timestamp": datetime.now()
         }
+        
+        # Reset sorting when new scan is performed
+        st.session_state.sort_column = None
+        st.session_state.sort_ascending = True
 
 # Display scan results
 if 'scan_results' in st.session_state and st.session_state.scan_results is not None:
@@ -227,55 +235,118 @@ if 'scan_results' in st.session_state and st.session_state.scan_results is not N
             'iv_pct', 'delta', 'otm_prob', 'pnl_rtn', 'ann_rtn', 'last_trade'
         ]
         
+        # Column display names mapping
+        column_display_names = {
+            'symbol': 'Symbol',
+            'price': 'Price',
+            'exp_date': 'Exp Date',
+            'strike': 'Strike',
+            'moneyness': 'Moneyness',
+            'bid': 'Bid',
+            'net_profit': 'Net Profit',
+            'be_bid': 'BE (Bid)',
+            'be_pct': 'BE%',
+            'volume': 'Volume',
+            'open_int': 'Open Int',
+            'iv_pct': 'IV',
+            'delta': 'Delta',
+            'otm_prob': 'OTM Prob',
+            'pnl_rtn': 'Ptnl Rtn',
+            'ann_rtn': 'Ann Rtn',
+            'last_trade': 'Last Trade'
+        }
+        
         # Select only the columns we want to display
         display_data = results[display_columns].copy()
         
-        # Create new dataframe for display with formatted values
+        # Create sortable column headers
+        st.subheader(f"{'Covered Call' if result_type == 'covered_call' else 'Cash-Secured Put'} Opportunities")
+        
+        # Add sorting controls as buttons in a horizontal layout
+        cols = st.columns(len(display_columns))
+        
+        # Function to handle sorting when a column header is clicked
+        def sort_column(col_name):
+            if st.session_state.sort_column == col_name:
+                # Toggle the sort direction if the same column is clicked again
+                st.session_state.sort_ascending = not st.session_state.sort_ascending
+            else:
+                # Set the new sort column and default to ascending
+                st.session_state.sort_column = col_name
+                st.session_state.sort_ascending = True
+            
+            # Force rerun to apply sorting
+            st.experimental_rerun()
+        
+        # Display sortable column headers
+        for i, col in enumerate(display_columns):
+            display_name = column_display_names[col]
+            # Add a sort indicator if this column is being sorted
+            if st.session_state.sort_column == col:
+                sort_indicator = "▼" if st.session_state.sort_ascending else "▲"
+                display_name = f"{display_name} {sort_indicator}"
+            
+            cols[i].button(
+                display_name, 
+                key=f"sort_{col}",
+                on_click=sort_column,
+                args=(col,),
+                use_container_width=True
+            )
+        
+        # Apply sorting if a sort column is selected
+        if st.session_state.sort_column:
+            sorted_data = display_data.sort_values(
+                by=st.session_state.sort_column,
+                ascending=st.session_state.sort_ascending
+            )
+        else:
+            # Default sort by annual return (descending)
+            sorted_data = display_data.sort_values(by='ann_rtn', ascending=False)
+        
+        # Create a new dataframe for display with formatted values
         formatted_df = pd.DataFrame()
         
         # Copy and format each column
-        formatted_df['Symbol'] = display_data['symbol']
-        formatted_df['Price'] = display_data['price'].apply(lambda x: f"${x:.2f}")
-        formatted_df['Exp Date'] = display_data['exp_date']
-        formatted_df['Strike'] = display_data['strike'].apply(lambda x: f"${x:.2f}")
+        formatted_df['Symbol'] = sorted_data['symbol']
+        formatted_df['Price'] = sorted_data['price'].apply(lambda x: f"${x:.2f}")
+        formatted_df['Exp Date'] = sorted_data['exp_date']
+        formatted_df['Strike'] = sorted_data['strike'].apply(lambda x: f"${x:.2f}")
         
         # Create colored moneyness column
         def format_moneyness(val):
             color = 'red' if val < 0 else 'green'
             return f'<span style="color:{color}">{val:.2f}%</span>'
         
-        formatted_df['Moneyness'] = display_data['moneyness'].apply(format_moneyness)
+        formatted_df['Moneyness'] = sorted_data['moneyness'].apply(format_moneyness)
         
         # Continue formatting other columns
-        formatted_df['Bid'] = display_data['bid'].apply(lambda x: f"${x:.2f}")
+        formatted_df['Bid'] = sorted_data['bid'].apply(lambda x: f"${x:.2f}")
         
         # Create colored net profit column
         def format_net_profit(val):
             color = 'red' if val < 0 else 'green'
             return f'<span style="color:{color}">${val:.2f}</span>'
         
-        formatted_df['Net Profit'] = display_data['net_profit'].apply(format_net_profit)
+        formatted_df['Net Profit'] = sorted_data['net_profit'].apply(format_net_profit)
         
         # Continue with other columns
-        formatted_df['BE (Bid)'] = display_data['be_bid'].apply(lambda x: f"${x:.2f}")
-        formatted_df['BE%'] = display_data['be_pct'].apply(lambda x: f"{x:.2f}%")
-        formatted_df['Volume'] = display_data['volume'].apply(lambda x: f"{x:,}")
-        formatted_df['Open Int'] = display_data['open_int'].apply(lambda x: f"{x:,}")
-        formatted_df['IV'] = display_data['iv_pct'].apply(lambda x: f"{x:.2f}%")
-        formatted_df['Delta'] = display_data['delta'].apply(lambda x: f"{x:.4f}")
-        formatted_df['OTM Prob'] = display_data['otm_prob'].apply(lambda x: f"{x:.2f}%")
-        formatted_df['Ptnl Rtn'] = display_data['pnl_rtn'].apply(lambda x: f"{x:.1f}%")
-        formatted_df['Ann Rtn'] = display_data['ann_rtn'].apply(lambda x: f"{x:.1f}%")
-        formatted_df['Last Trade'] = display_data['last_trade']
-        
-        # Display the table
-        st.subheader(f"{'Covered Call' if result_type == 'covered_call' else 'Cash-Secured Put'} Opportunities")
+        formatted_df['BE (Bid)'] = sorted_data['be_bid'].apply(lambda x: f"${x:.2f}")
+        formatted_df['BE%'] = sorted_data['be_pct'].apply(lambda x: f"{x:.2f}%")
+        formatted_df['Volume'] = sorted_data['volume'].apply(lambda x: f"{x:,}")
+        formatted_df['Open Int'] = sorted_data['open_int'].apply(lambda x: f"{x:,}")
+        formatted_df['IV'] = sorted_data['iv_pct'].apply(lambda x: f"{x:.2f}%")
+        formatted_df['Delta'] = sorted_data['delta'].apply(lambda x: f"{x:.4f}")
+        formatted_df['OTM Prob'] = sorted_data['otm_prob'].apply(lambda x: f"{x:.2f}%")
+        formatted_df['Ptnl Rtn'] = sorted_data['pnl_rtn'].apply(lambda x: f"{x:.1f}%")
+        formatted_df['Ann Rtn'] = sorted_data['ann_rtn'].apply(lambda x: f"{x:.1f}%")
+        formatted_df['Last Trade'] = sorted_data['last_trade']
         
         # Use HTML to render the formatted table with colors
         st.write(formatted_df.to_html(escape=False, index=False), unsafe_allow_html=True)
         
         # Offer download button for the data
-        csv = display_data.to_csv(index=False).encode('utf-8')
+        csv = sorted_data.to_csv(index=False).encode('utf-8')
         st.download_button(
             label="Download results as CSV",
             data=csv,
