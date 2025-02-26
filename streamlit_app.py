@@ -1,18 +1,3 @@
-#!/usr/bin/env python3
-"""
-Options Scanner - Daily Data Fetch Script
------------------------------------------
-This script fetches options data from Schwab API and saves it to a local SQLite database.
-It should be scheduled to run once per day at market open (9:30 AM ET).
-
-Setup instructions:
-1. Schedule this script using cron (Linux/Mac) or Task Scheduler (Windows)
-2. Ensure all dependencies are installed: pip install requests pandas numpy
-
-Example cron job (runs at 9:31 AM ET weekdays):
-31 9 * * 1-5 /path/to/scheduled_fetch.py
-
-"""
 
 import requests
 import json
