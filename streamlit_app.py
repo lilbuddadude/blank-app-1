@@ -468,9 +468,9 @@ if 'scan_results' in st.session_state and st.session_state.scan_results is not N
     
         # Check if data_as_of exists before using strftime
         if data_as_of:
-        st.info(f"Data as of: {data_as_of.strftime('%Y-%m-%d %I:%M:%S %p')}")
+            st.info(f"Data as of: {data_as_of.strftime('%Y-%m-%d %I:%M:%S %p')}")
         else:
-        st.info("Using freshly generated data")
+            st.info("Using freshly generated data")
         
         # Common columns for both strategies (Barchart-style)
         display_columns = [
