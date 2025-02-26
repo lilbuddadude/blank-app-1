@@ -465,8 +465,12 @@ if 'scan_results' in st.session_state and st.session_state.scan_results is not N
     # Show results summary
     if not results.empty:
         st.success(f"Found {len(results)} opportunities (Scan time: {timestamp.strftime('%I:%M:%S %p')})")
+    
+        # Check if data_as_of exists before using strftime
         if data_as_of:
-            st.info(f"Data as of: {data_as_of.strftime('%Y-%m-%d %I:%M:%S %p')}")
+        st.info(f"Data as of: {data_as_of.strftime('%Y-%m-%d %I:%M:%S %p')}")
+        else:
+        st.info("Using freshly generated data")
         
         # Common columns for both strategies (Barchart-style)
         display_columns = [
