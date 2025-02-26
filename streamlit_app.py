@@ -103,64 +103,76 @@ def save_to_database(data, option_type):
 # Load data from database
 def load_from_database(option_type):
     """Load options data from SQLite database"""
-    conn = sqlite3.connect('options_data.db')
-    
-    # Get metadata
-    metadata_df = pd.read_sql("SELECT last_updated FROM data_metadata WHERE source = ?", 
-                            conn, params=(option_type,))
-    
-    if metadata_df.empty:
+    try:
+        conn = sqlite3.connect('options_data.db')
+        
+        # Get metadata
+        metadata_df = pd.read_sql("SELECT last_updated FROM data_metadata WHERE source = ?", 
+                                conn, params=(option_type,))
+        
+        if metadata_df.empty:
+            conn.close()
+            return None, None
+        
+        last_updated = metadata_df['last_updated'].iloc[0]
+        
+        # Get options data
+        data_df = pd.read_sql("SELECT * FROM options_data WHERE option_type = ?", 
+                             conn, params=(option_type,))
+        
         conn.close()
-        return None, None
-    
-    last_updated = metadata_df['last_updated'].iloc[0]
-    
-    # Get options data
-    data_df = pd.read_sql("SELECT * FROM options_data WHERE option_type = ?", 
-                         conn, params=(option_type,))
-    
-    conn.close()
-    
-    if data_df.empty:
-        return None, last_updated
-    
-    # Process data to match our expected format
-    data_df = data_df.rename(columns={
-        'open_interest': 'open_int',
-        'implied_volatility': 'iv_pct'
-    })
-    
-    # Calculate additional metrics based on strategy type
-    if option_type == "covered_call":
-        # Calculate covered call metrics
-        data_df['moneyness'] = (data_df['strike'] - data_df['price']) / data_df['price'] * 100
-        data_df['net_profit'] = (data_df['bid'] * 100) - ((100 * data_df['price']) - (100 * data_df['strike']))
-        data_df['be_bid'] = data_df['price'] - data_df['bid']
-        data_df['be_pct'] = (data_df['be_bid'] - data_df['price']) / data_df['price'] * 100
-        data_df['otm_prob'] = (1 - data_df['delta']) * 100
-    else:  # cash_secured_put
-        # Calculate cash-secured put metrics
-        data_df['moneyness'] = (data_df['strike'] - data_df['price']) / data_df['price'] * 100
-        data_df['net_profit'] = (data_df['bid'] * 100) - ((100 * data_df['strike']) - (100 * data_df['price']))
-        data_df['be_bid'] = data_df['strike'] - data_df['bid']
-        data_df['be_pct'] = (data_df['be_bid'] - data_df['price']) / data_df['price'] * 100
-        data_df['otm_prob'] = data_df['delta'] * 100
-    
-    # Calculate returns
-    # Add days to expiry calculation
-    data_df['days_to_expiry'] = data_df['exp_date'].apply(
-        lambda x: (datetime.strptime(x, "%m/%d/%y") - datetime.now()).days
-    )
-    data_df['days_to_expiry'] = data_df['days_to_expiry'].apply(lambda x: max(1, x))  # Ensure at least 1 day
-    
-    data_df['pnl_rtn'] = (data_df['bid'] / data_df['price']) * 100
-    data_df['ann_rtn'] = data_df['pnl_rtn'] * (365 / data_df['days_to_expiry'])
-    
-    # Ensure all columns exist
-    if 'last_trade' not in data_df.columns:
-        data_df['last_trade'] = "N/A"
-    
-    return data_df, last_updated
+        
+        if data_df.empty:
+            return None, last_updated
+        
+        # Process data to match our expected format
+        data_df = data_df.rename(columns={
+            'open_interest': 'open_int',
+            'implied_volatility': 'iv_pct'
+        })
+        
+        # Calculate additional metrics based on strategy type
+        if option_type == "covered_call":
+            # Calculate covered call metrics
+            data_df['moneyness'] = (data_df['strike'] - data_df['price']) / data_df['price'] * 100
+            data_df['net_profit'] = (data_df['bid'] * 100) - ((100 * data_df['price']) - (100 * data_df['strike']))
+            data_df['be_bid'] = data_df['price'] - data_df['bid']
+            data_df['be_pct'] = (data_df['be_bid'] - data_df['price']) / data_df['price'] * 100
+            data_df['otm_prob'] = (1 - data_df['delta']) * 100
+        else:  # cash_secured_put
+            # Calculate cash-secured put metrics
+            data_df['moneyness'] = (data_df['strike'] - data_df['price']) / data_df['price'] * 100
+            data_df['net_profit'] = (data_df['bid'] * 100) - ((100 * data_df['strike']) - (100 * data_df['price']))
+            data_df['be_bid'] = data_df['strike'] - data_df['bid']
+            data_df['be_pct'] = (data_df['be_bid'] - data_df['price']) / data_df['price'] * 100
+            data_df['otm_prob'] = data_df['delta'] * 100
+        
+        # Calculate returns
+        # Add days to expiry calculation
+        data_df['days_to_expiry'] = data_df['exp_date'].apply(
+            lambda x: (datetime.strptime(x, "%m/%d/%y") - datetime.now()).days
+        )
+        data_df['days_to_expiry'] = data_df['days_to_expiry'].apply(lambda x: max(1, x))  # Ensure at least 1 day
+        
+        data_df['pnl_rtn'] = (data_df['bid'] / data_df['price']) * 100
+        data_df['ann_rtn'] = data_df['pnl_rtn'] * (365 / data_df['days_to_expiry'])
+        
+        # Ensure all columns exist
+        if 'last_trade' not in data_df.columns:
+            data_df['last_trade'] = "N/A"
+        
+        # Try to parse last_updated as datetime if it's a string
+        try:
+            if isinstance(last_updated, str):
+                last_updated = datetime.strptime(last_updated, '%Y-%m-%d %H:%M:%S.%f')
+        except Exception:
+            # If parsing fails, use current time
+            last_updated = datetime.now()
+        
+        return data_df, last_updated
+    except Exception as e:
+        st.error(f"Error loading from database: {str(e)}")
+        return None, datetime.now()
 
 # Function to fetch from API (simulation for now)
 def fetch_from_api(strategy_type="covered_call"):
@@ -172,16 +184,20 @@ def fetch_from_api(strategy_type="covered_call"):
 def refresh_data_from_api():
     """Refresh all data from the API and store in database"""
     with st.spinner("Fetching latest data from API..."):
-        # Fetch covered calls
-        cc_data = fetch_from_api(strategy_type="covered_call")
-        cc_timestamp = save_to_database(cc_data, "covered_call")
-        
-        # Fetch cash secured puts
-        csp_data = fetch_from_api(strategy_type="cash_secured_put")
-        csp_timestamp = save_to_database(csp_data, "cash_secured_put")
-        
-        # Return the latest timestamp
-        return max(cc_timestamp, csp_timestamp) if cc_timestamp and csp_timestamp else None
+        try:
+            # Fetch covered calls
+            cc_data = fetch_from_api(strategy_type="covered_call")
+            cc_timestamp = save_to_database(cc_data, "covered_call")
+            
+            # Fetch cash secured puts
+            csp_data = fetch_from_api(strategy_type="cash_secured_put")
+            csp_timestamp = save_to_database(csp_data, "cash_secured_put")
+            
+            # Return the latest timestamp
+            return max(cc_timestamp, csp_timestamp) if cc_timestamp and csp_timestamp else datetime.now()
+        except Exception as e:
+            st.error(f"Error refreshing data: {str(e)}")
+            return datetime.now()
 
 # Simple function to simulate option data
 def generate_mock_option_data(strategy_type="covered_call", num_rows=20):
@@ -311,27 +327,42 @@ setup_database()
 # Check if database needs initialization
 def check_database_status():
     """Check if database has data and when it was last updated"""
-    conn = sqlite3.connect('options_data.db')
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='data_metadata'")
-    if cursor.fetchone()[0] == 0:
+    try:
+        conn = sqlite3.connect('options_data.db')
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='data_metadata'")
+        if cursor.fetchone()[0] == 0:
+            conn.close()
+            return None
+        
+        cursor.execute("SELECT last_updated FROM data_metadata ORDER BY last_updated DESC LIMIT 1")
+        result = cursor.fetchone()
+        
         conn.close()
+        
+        if not result:
+            return None
+        
+        # Try to parse as datetime
+        try:
+            if isinstance(result[0], str):
+                return datetime.strptime(result[0], '%Y-%m-%d %H:%M:%S.%f')
+            else:
+                return result[0]
+        except Exception:
+            return datetime.now()
+    except Exception as e:
+        st.warning(f"Database check error: {str(e)}")
         return None
-    
-    cursor.execute("SELECT last_updated FROM data_metadata ORDER BY last_updated DESC LIMIT 1")
-    result = cursor.fetchone()
-    
-    conn.close()
-    
-    if not result:
-        return None
-    
-    return datetime.strptime(result[0], '%Y-%m-%d %H:%M:%S.%f')
 
 # Get database status
-last_update = check_database_status()
-st.session_state.db_last_updated = last_update
+try:
+    last_update = check_database_status()
+    st.session_state.db_last_updated = last_update
+except Exception as e:
+    st.error(f"Error checking database: {str(e)}")
+    st.session_state.db_last_updated = None
 
 # Sidebar
 with st.sidebar:
@@ -346,12 +377,15 @@ with st.sidebar:
     
     # Refresh button
     if st.button("🔄 Refresh Data from API", use_container_width=True):
-        new_timestamp = refresh_data_from_api()
-        if new_timestamp:
-            st.session_state.db_last_updated = new_timestamp
-            st.success(f"✅ Data refreshed at {new_timestamp.strftime('%H:%M:%S')}")
-            # Force rerun to update the UI
-            st.experimental_rerun()
+        try:
+            new_timestamp = refresh_data_from_api()
+            if new_timestamp:
+                st.session_state.db_last_updated = new_timestamp
+                st.success(f"✅ Data refreshed at {new_timestamp.strftime('%H:%M:%S')}")
+                # Force rerun to update the UI
+                st.experimental_rerun()
+        except Exception as e:
+            st.error(f"Error refreshing data: {str(e)}")
     
     # API credentials info
     st.write("**Schwab API Credentials**")
@@ -427,7 +461,7 @@ if scan_button:
                     st.error("Failed to fetch data from API")
         
         # Apply filters if we have results
-        if results is not None:
+        if results is not None and not results.empty:
             # Apply price filters
             results = results[
                 (results['price'] >= min_stock_price) & 
@@ -448,7 +482,30 @@ if scan_button:
                 "type": strategy_type,
                 "data": results,
                 "timestamp": datetime.now(),
-                "data_as_of": last_updated
+                "data_as_of": last_updated if last_updated else datetime.now()
+            }
+            
+            # Reset sorting when new scan is performed
+            st.session_state.sort_column = None
+            st.session_state.sort_ascending = True
+        else:
+            # Generate new mock data if database is empty
+            results = generate_mock_option_data(strategy_type=strategy_type, num_rows=30)
+            
+            # Apply filters
+            results = results[
+                (results['price'] >= min_stock_price) & 
+                (results['price'] <= max_stock_price)
+            ]
+            
+            results = results[results['ann_rtn'] >= min_annual_return]
+            
+            # Save results to session state
+            st.session_state.scan_results = {
+                "type": strategy_type,
+                "data": results,
+                "timestamp": datetime.now(),
+                "data_as_of": datetime.now()  # Use current time for mock data
             }
             
             # Reset sorting when new scan is performed
@@ -457,18 +514,24 @@ if scan_button:
 
 # Display scan results
 if 'scan_results' in st.session_state and st.session_state.scan_results is not None:
-    results = st.session_state.scan_results.get('data')
-    result_type = st.session_state.scan_results.get('type')
-    timestamp = st.session_state.scan_results.get('timestamp')
+    results = st.session_state.scan_results.get('data', pd.DataFrame())
+    result_type = st.session_state.scan_results.get('type', '')
+    timestamp = st.session_state.scan_results.get('timestamp', datetime.now())
     data_as_of = st.session_state.scan_results.get('data_as_of')
     
     # Show results summary
     if not results.empty:
         st.success(f"Found {len(results)} opportunities (Scan time: {timestamp.strftime('%I:%M:%S %p')})")
-    
-        # Check if data_as_of exists before using strftime
+        
+        # FIXED: Handle the data_as_of display with proper error checking
         if data_as_of:
-            st.info(f"Data as of: {data_as_of.strftime('%Y-%m-%d %I:%M:%S %p')}")
+            try:
+                # Try to format the timestamp
+                data_as_of_str = data_as_of.strftime('%Y-%m-%d %I:%M:%S %p')
+                st.info(f"Data as of: {data_as_of_str}")
+            except Exception:
+                # If formatting fails, display generic message
+                st.info("Using latest available data")
         else:
             st.info("Using freshly generated data")
         
@@ -478,6 +541,15 @@ if 'scan_results' in st.session_state and st.session_state.scan_results is not N
             'net_profit', 'be_bid', 'be_pct', 'volume', 'open_int', 
             'iv_pct', 'delta', 'otm_prob', 'pnl_rtn', 'ann_rtn', 'last_trade'
         ]
+        
+        # Check if all columns exist in the results DataFrame
+        for col in display_columns:
+            if col not in results.columns:
+                if col == 'last_trade':
+                    results[col] = "N/A"
+                else:
+                    # For other missing columns, use a default value
+                    results[col] = 0
         
         # Column display names mapping
         column_display_names = {
@@ -539,7 +611,7 @@ if 'scan_results' in st.session_state and st.session_state.scan_results is not N
             )
         
         # Apply sorting if a sort column is selected
-        if st.session_state.sort_column:
+        if st.session_state.sort_column and st.session_state.sort_column in display_data.columns:
             sorted_data = display_data.sort_values(
                 by=st.session_state.sort_column,
                 ascending=st.session_state.sort_ascending
@@ -590,13 +662,16 @@ if 'scan_results' in st.session_state and st.session_state.scan_results is not N
         st.write(formatted_df.to_html(escape=False, index=False), unsafe_allow_html=True)
         
         # Offer download button for the data
-        csv = sorted_data.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="Download results as CSV",
-            data=csv,
-            file_name=f"options_scan_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-            mime='text/csv',
-        )
+        try:
+            csv = sorted_data.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="Download results as CSV",
+                data=csv,
+                file_name=f"options_scan_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                mime='text/csv',
+            )
+        except Exception as e:
+            st.error(f"Error creating download button: {str(e)}")
     else:
         st.info("No opportunities found matching your criteria. Try adjusting your filter settings.")
 else:
