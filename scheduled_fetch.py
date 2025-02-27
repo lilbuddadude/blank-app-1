@@ -44,9 +44,8 @@ LOG_PATH = 'options_fetch.log'
 API_KEY = "Vtbsc861GI48iT3JgAr8bp5Hvy5cVe7O"
 API_SECRET = "SvMJwXrepRDQBiXr"
 
-# Schwab API Endpoints
 SCHWAB_AUTH_URL = "https://api.schwabapi.com/v1/oauth/token"
-SCHWAB_OPTIONS_URL = "https://api.schwabapi.com/v1/markets/options/chains"
+SCHWAB_AUTH_AUTHORIZE_URL = "https://api.schwabapi.com/v1/oauth/authorize"
 
 # Set to True to use mock data instead of API data
 USE_MOCK_DATA = False
