@@ -41,8 +41,8 @@ DB_PATH = 'options_data.db'
 LOG_PATH = 'options_fetch.log'
 
 # Schwab API Credentials - REPLACE WITH YOUR ACTUAL CREDENTIALS
-API_KEY = "your_actual_api_key_here"
-API_SECRET = "your_actual_api_secret_here"
+API_KEY = "Vtbsc861GI48iT3JgAr8bp5Hvy5cVe7O"
+API_SECRET = "SvMJwXrepRDQBiXr"
 
 # Schwab API Endpoints
 SCHWAB_AUTH_URL = "https://api.schwab.com/v1/oauth2/token"
