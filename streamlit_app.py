@@ -5,6 +5,8 @@ from datetime import datetime, timedelta
 import time
 import sqlite3
 import os
+import traceback
+import subprocess
 
 # Set page config with dark theme
 st.set_page_config(
@@ -23,88 +25,66 @@ if 'sort_ascending' not in st.session_state:
     st.session_state.sort_ascending = True
 if 'db_last_updated' not in st.session_state:
     st.session_state.db_last_updated = None
+if 'api_status' not in st.session_state:
+    st.session_state.api_status = "Unknown"
+if 'db_status_message' not in st.session_state:
+    st.session_state.db_status_message = ""
 
 # Title and description
 st.title("Options Arbitrage Scanner")
 st.write("Scan for profitable covered call and cash-secured put opportunities")
+
+# Define constants
+DB_PATH = 'options_data.db'
 
 # ========== DATABASE FUNCTIONS ==========
 
 # Setup database
 def setup_database():
     """Create SQLite database and tables if they don't exist"""
-    conn = sqlite3.connect('options_data.db')
-    cursor = conn.cursor()
-    
-    # Create tables
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS options_data (
-        id INTEGER PRIMARY KEY,
-        symbol TEXT,
-        price REAL,
-        exp_date TEXT,
-        strike REAL,
-        option_type TEXT,
-        bid REAL,
-        ask REAL,
-        volume INTEGER,
-        open_interest INTEGER,
-        implied_volatility REAL,
-        delta REAL,
-        timestamp DATETIME
-    )
-    ''')
-    
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS data_metadata (
-        id INTEGER PRIMARY KEY,
-        last_updated DATETIME,
-        source TEXT
-    )
-    ''')
-    
-    conn.commit()
-    conn.close()
-
-# Save data to database
-def save_to_database(data, option_type):
-    """Save options data to SQLite database"""
-    conn = sqlite3.connect('options_data.db')
-    cursor = conn.cursor()
-    
-    # Clear old data of this type
-    cursor.execute("DELETE FROM options_data WHERE option_type = ?", (option_type,))
-    
-    # Insert new data
-    timestamp = datetime.now()
-    for _, row in data.iterrows():
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Create tables
         cursor.execute('''
-        INSERT INTO options_data (
-            symbol, price, exp_date, strike, option_type, 
-            bid, ask, volume, open_interest, implied_volatility, 
-            delta, timestamp
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            row['symbol'], row['price'], row['exp_date'], row['strike'], option_type,
-            row['bid'], row.get('ask', 0), row['volume'], row['open_int'], row['iv_pct'],
-            row['delta'], timestamp
-        ))
-    
-    # Update metadata
-    cursor.execute("DELETE FROM data_metadata WHERE source = ?", (option_type,))
-    cursor.execute("INSERT INTO data_metadata (last_updated, source) VALUES (?, ?)", 
-                  (timestamp, option_type))
-    
-    conn.commit()
-    conn.close()
-    
-    return timestamp
+        CREATE TABLE IF NOT EXISTS options_data (
+            id INTEGER PRIMARY KEY,
+            symbol TEXT,
+            price REAL,
+            exp_date TEXT,
+            strike REAL,
+            option_type TEXT,
+            bid REAL,
+            ask REAL,
+            volume INTEGER,
+            open_interest INTEGER,
+            implied_volatility REAL,
+            delta REAL,
+            timestamp DATETIME
+        )
+        ''')
+        
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS data_metadata (
+            id INTEGER PRIMARY KEY,
+            last_updated DATETIME,
+            source TEXT
+        )
+        ''')
+        
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        st.error(f"Database setup error: {str(e)}")
+        return False
 
 # Load data from database
 def load_from_database(option_type):
     """Load options data from SQLite database"""
     try:
-        conn = sqlite3.connect('options_data.db')
+        conn = sqlite3.connect(DB_PATH)
         
         # Get metadata
         metadata_df = pd.read_sql("SELECT last_updated FROM data_metadata WHERE source = ?", 
@@ -174,45 +154,82 @@ def load_from_database(option_type):
         st.error(f"Error loading from database: {str(e)}")
         return None, datetime.now()
 
-# Function to fetch from API (simulation for now)
-def fetch_from_api(strategy_type="covered_call"):
-    """Fetch data from API or generate mock data for testing"""
-    # This would be replaced with actual API call to Schwab
-    return generate_mock_option_data(strategy_type=strategy_type, num_rows=30)
-
-# Function to perform a full data refresh from API
-def refresh_data_from_api():
-    """Refresh all data from the API and store in database"""
-    with st.spinner("Fetching latest data from API..."):
+# Check if database needs initialization
+def check_database_status():
+    """Check if database has data and when it was last updated"""
+    try:
+        if not os.path.exists(DB_PATH):
+            return None, "No database found"
+            
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='data_metadata'")
+        if cursor.fetchone()[0] == 0:
+            conn.close()
+            return None, "Database tables not initialized"
+        
+        cursor.execute("SELECT last_updated, source FROM data_metadata ORDER BY last_updated DESC LIMIT 1")
+        result = cursor.fetchone()
+        
+        # Check if we have any data
+        cursor.execute("SELECT COUNT(*) FROM options_data")
+        data_count = cursor.fetchone()[0]
+        
+        conn.close()
+        
+        if not result:
+            return None, "No metadata found"
+        
+        if data_count == 0:
+            return None, "Database exists but contains no data"
+            
+        # Try to parse as datetime
         try:
-            # Fetch covered calls
-            cc_data = fetch_from_api(strategy_type="covered_call")
-            cc_timestamp = save_to_database(cc_data, "covered_call")
+            if isinstance(result[0], str):
+                timestamp = datetime.strptime(result[0], '%Y-%m-%d %H:%M:%S.%f')
+            else:
+                timestamp = result[0]
             
-            # Fetch cash secured puts
-            csp_data = fetch_from_api(strategy_type="cash_secured_put")
-            csp_timestamp = save_to_database(csp_data, "cash_secured_put")
-            
-            # Return the latest timestamp
-            return max(cc_timestamp, csp_timestamp) if cc_timestamp and csp_timestamp else datetime.now()
-        except Exception as e:
-            st.error(f"Error refreshing data: {str(e)}")
-            return datetime.now()
+            data_source = result[1] if len(result) > 1 else "Unknown"
+            return timestamp, f"Database contains {data_count} records, last updated from {data_source}"
+        except Exception:
+            return datetime.now(), f"Database contains {data_count} records"
+    except Exception as e:
+        return None, f"Database error: {str(e)}"
 
-# Simple function to simulate option data
+# Function to run the scheduled fetch script
+def run_refresh_script():
+    """Run the scheduled_fetch.py script to refresh data"""
+    try:
+        result = subprocess.run(["python", "scheduled_fetch.py"], 
+                               capture_output=True, text=True, check=True)
+        
+        if result.returncode == 0:
+            st.session_state.api_status = "Success"
+            return True, "Data refresh completed successfully"
+        else:
+            st.session_state.api_status = "Error"
+            return False, f"Error: {result.stderr}"
+    except Exception as e:
+        st.session_state.api_status = "Error"
+        return False, f"Error running refresh script: {str(e)}"
+
+# Function to generate mock data if needed (fallback only)
 def generate_mock_option_data(strategy_type="covered_call", num_rows=20):
-    """Generate mock option data for testing"""
+    """Generate mock option data for testing - only used if database access fails"""
     np.random.seed(42)  # For consistent results
     
-    symbols = ["SMCI", "NVDL", "NVDX", "AAPL", "MSFT", "NVDA", "AMD"]
+    symbols = ["SMCI", "NVDA", "AAPL", "MSFT", "AMD", "GOOGL", "META", "TSLA"]
     prices = {
         "SMCI": 46.07,
-        "NVDL": 54.05,
-        "NVDX": 11.33,
-        "AAPL": 184.25,
-        "MSFT": 417.75,
         "NVDA": 842.32,
-        "AMD": 174.49
+        "AAPL": 184.25,
+        "MSFT": 417.75, 
+        "AMD": 174.49,
+        "GOOGL": 178.35,
+        "META": 515.28,
+        "TSLA": 176.75
     }
     
     data = []
@@ -232,7 +249,8 @@ def generate_mock_option_data(strategy_type="covered_call", num_rows=20):
             
             # Option price calculation
             bid_price = round((stock_price - strike) + (stock_price * 0.03), 2)
-            ask_price = round(bid_price * 1.1, 2)  # Add ask price
+            bid_price = max(0.01, bid_price)  # Ensure positive
+            ask_price = round(bid_price * 1.1, 2)
             
             # Calculate metrics
             net_profit = (bid_price * 100) - ((100 * stock_price) - (100 * strike))
@@ -269,7 +287,8 @@ def generate_mock_option_data(strategy_type="covered_call", num_rows=20):
                 "otm_prob": otm_prob,
                 "pnl_rtn": potential_return,
                 "ann_rtn": annual_return,
-                "last_trade": f"{np.random.randint(1, 15)}:{np.random.randint(10, 59)} ET"
+                "last_trade": f"{np.random.randint(1, 15)}:{np.random.randint(10, 59)} ET",
+                "days_to_expiry": days_to_expiry
             })
         else:  # Cash-Secured Puts
             strike = round(stock_price * np.random.uniform(0.7, 0.95), 2)
@@ -277,7 +296,8 @@ def generate_mock_option_data(strategy_type="covered_call", num_rows=20):
             
             # Option price calculation
             bid_price = round(stock_price * 0.03 * (1 + abs(moneyness)/10), 2)
-            ask_price = round(bid_price * 1.1, 2)  # Add ask price
+            bid_price = max(0.01, bid_price)  # Ensure positive
+            ask_price = round(bid_price * 1.1, 2)
             
             # Calculate metrics
             net_profit = (bid_price * 100) - ((100 * strike) - (100 * stock_price))
@@ -314,7 +334,8 @@ def generate_mock_option_data(strategy_type="covered_call", num_rows=20):
                 "otm_prob": otm_prob,
                 "pnl_rtn": potential_return,
                 "ann_rtn": annual_return,
-                "last_trade": f"{np.random.randint(1, 15)}:{np.random.randint(10, 59)} ET"
+                "last_trade": f"{np.random.randint(1, 15)}:{np.random.randint(10, 59)} ET",
+                "days_to_expiry": days_to_expiry
             })
     
     return pd.DataFrame(data)
@@ -322,47 +343,12 @@ def generate_mock_option_data(strategy_type="covered_call", num_rows=20):
 # ========== APP INITIALIZATION ==========
 
 # Setup database on app start
-setup_database()
-
-# Check if database needs initialization
-def check_database_status():
-    """Check if database has data and when it was last updated"""
-    try:
-        conn = sqlite3.connect('options_data.db')
-        cursor = conn.cursor()
-        
-        cursor.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='data_metadata'")
-        if cursor.fetchone()[0] == 0:
-            conn.close()
-            return None
-        
-        cursor.execute("SELECT last_updated FROM data_metadata ORDER BY last_updated DESC LIMIT 1")
-        result = cursor.fetchone()
-        
-        conn.close()
-        
-        if not result:
-            return None
-        
-        # Try to parse as datetime
-        try:
-            if isinstance(result[0], str):
-                return datetime.strptime(result[0], '%Y-%m-%d %H:%M:%S.%f')
-            else:
-                return result[0]
-        except Exception:
-            return datetime.now()
-    except Exception as e:
-        st.warning(f"Database check error: {str(e)}")
-        return None
+setup_result = setup_database()
 
 # Get database status
-try:
-    last_update = check_database_status()
-    st.session_state.db_last_updated = last_update
-except Exception as e:
-    st.error(f"Error checking database: {str(e)}")
-    st.session_state.db_last_updated = None
+last_update, status_message = check_database_status()
+st.session_state.db_last_updated = last_update
+st.session_state.db_status_message = status_message
 
 # Sidebar
 with st.sidebar:
@@ -372,25 +358,34 @@ with st.sidebar:
     if st.session_state.db_last_updated:
         last_update_str = st.session_state.db_last_updated.strftime('%Y-%m-%d %H:%M:%S')
         st.info(f"📊 Using local database (Last updated: {last_update_str})")
+        st.caption(st.session_state.db_status_message)
     else:
         st.warning("⚠️ No data in local database. Click 'Refresh Data' to fetch from API.")
+        st.caption(st.session_state.db_status_message)
     
     # Refresh button
-    if st.button("🔄 Refresh Data from API", use_container_width=True):
-        try:
-            new_timestamp = refresh_data_from_api()
-            if new_timestamp:
-                st.session_state.db_last_updated = new_timestamp
-                st.success(f"✅ Data refreshed at {new_timestamp.strftime('%H:%M:%S')}")
+    if st.button("🔄 Refresh Data from Schwab API", use_container_width=True):
+        with st.spinner("Fetching data from Schwab API..."):
+            success, message = run_refresh_script()
+            if success:
+                st.success("✅ Data refresh completed successfully")
+                # Recheck database status
+                last_update, status_message = check_database_status()
+                st.session_state.db_last_updated = last_update
+                st.session_state.db_status_message = status_message
                 # Force rerun to update the UI
                 st.experimental_rerun()
-        except Exception as e:
-            st.error(f"Error refreshing data: {str(e)}")
+            else:
+                st.error(f"❌ {message}")
     
-    # API credentials info
-    st.write("**Schwab API Credentials**")
-    st.write("✓ API Key: Vtbsc861GI4...Ve7O")
-    st.write("✓ Secret: SvMJwXre...BiXr")
+    # API status indicator
+    api_status = st.session_state.api_status
+    if api_status == "Success":
+        st.success("✓ Schwab API Connection: Active")
+    elif api_status == "Error":
+        st.error("✗ Schwab API Connection: Error")
+    else:
+        st.info("❓ Schwab API Connection: Not tested")
     
     # Strategy selector
     strategy = st.radio(
@@ -436,6 +431,15 @@ with st.sidebar:
             value=(0, 45),
             step=1
         )
+        
+        # Optional: Add filters for IV, delta, etc.
+        max_iv = st.slider(
+            "Max Implied Volatility (%)",
+            min_value=0,
+            max_value=1000,
+            value=1000,
+            step=50
+        )
     
     # Scan button
     scan_button = st.button("Scan for Opportunities", type="primary", use_container_width=True)
@@ -448,20 +452,11 @@ if scan_button:
         # First check if we have data in the database
         results, last_updated = load_from_database(strategy_type)
         
-        # If no data in database, fetch from API
-        if results is None:
-            if st.session_state.db_last_updated is None:
-                st.warning("No data in database. Fetching from API...")
-                new_timestamp = refresh_data_from_api()
-                if new_timestamp:
-                    st.session_state.db_last_updated = new_timestamp
-                    # Try loading again
-                    results, last_updated = load_from_database(strategy_type)
-                else:
-                    st.error("Failed to fetch data from API")
-        
-        # Apply filters if we have results
-        if results is not None and not results.empty:
+        # If no data in database, prompt user to refresh
+        if results is None or results.empty:
+            st.warning("No data available in database. Please click 'Refresh Data from Schwab API' in the sidebar.")
+            st.session_state.scan_results = None
+        else:
             # Apply price filters
             results = results[
                 (results['price'] >= min_stock_price) & 
@@ -477,35 +472,16 @@ if scan_button:
             # Apply return filters
             results = results[results['ann_rtn'] >= min_annual_return]
             
+            # Apply IV filter if set
+            if 'iv_pct' in results.columns:
+                results = results[results['iv_pct'] <= max_iv]
+            
             # Save results to session state
             st.session_state.scan_results = {
                 "type": strategy_type,
                 "data": results,
                 "timestamp": datetime.now(),
                 "data_as_of": last_updated if last_updated else datetime.now()
-            }
-            
-            # Reset sorting when new scan is performed
-            st.session_state.sort_column = None
-            st.session_state.sort_ascending = True
-        else:
-            # Generate new mock data if database is empty
-            results = generate_mock_option_data(strategy_type=strategy_type, num_rows=30)
-            
-            # Apply filters
-            results = results[
-                (results['price'] >= min_stock_price) & 
-                (results['price'] <= max_stock_price)
-            ]
-            
-            results = results[results['ann_rtn'] >= min_annual_return]
-            
-            # Save results to session state
-            st.session_state.scan_results = {
-                "type": strategy_type,
-                "data": results,
-                "timestamp": datetime.now(),
-                "data_as_of": datetime.now()  # Use current time for mock data
             }
             
             # Reset sorting when new scan is performed
@@ -523,7 +499,7 @@ if 'scan_results' in st.session_state and st.session_state.scan_results is not N
     if not results.empty:
         st.success(f"Found {len(results)} opportunities (Scan time: {timestamp.strftime('%I:%M:%S %p')})")
         
-        # FIXED: Handle the data_as_of display with proper error checking
+        # Handle the data_as_of display with proper error checking
         if data_as_of:
             try:
                 # Try to format the timestamp
