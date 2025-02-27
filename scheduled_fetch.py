@@ -1,337 +1,429 @@
 #!/usr/bin/env python3
 """
-Options Scanner - Setup Script
------------------------------
-This script helps set up the Options Scanner application by:
-1. Installing required dependencies
-2. Configuring the Schwab API credentials
-3. Setting up the database
-4. Testing the API connection
-5. Creating scheduled tasks (optional)
+Options Scanner - Daily Data Fetch Script with Schwab API Integration
+--------------------------------------------------------------------
+This script fetches options data from Schwab API and saves it to a local SQLite database.
+It should be scheduled to run once per day at market open (9:30 AM ET).
 
-Usage:
-    python setup.py
+Setup instructions:
+1. Schedule this script using cron (Linux/Mac) or Task Scheduler (Windows)
+2. Ensure all dependencies are installed: pip install requests pandas numpy
+
+Example cron job (runs at 9:31 AM ET weekdays):
+31 9 * * 1-5 /path/to/scheduled_fetch.py
 
 """
 
+import requests
+import json
+import sqlite3
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
 import os
 import sys
-import subprocess
-import platform
-import getpass
+import time
+import logging
+import traceback
 
-# Colors for terminal output
-class Colors:
-    HEADER = '\033[95m'
-    BLUE = '\033[94m'
-    GREEN = '\033[92m'
-    YELLOW = '\033[93m'
-    RED = '\033[91m'
-    ENDC = '\033[0m'
-    BOLD = '\033[1m'
-
-def print_header(text):
-    print(f"\n{Colors.HEADER}{Colors.BOLD}=== {text} ==={Colors.ENDC}\n")
-
-def print_success(text):
-    print(f"{Colors.GREEN}✓ {text}{Colors.ENDC}")
-
-def print_error(text):
-    print(f"{Colors.RED}✗ {text}{Colors.ENDC}")
-
-def print_warning(text):
-    print(f"{Colors.YELLOW}⚠ {text}{Colors.ENDC}")
-
-def print_info(text):
-    print(f"{Colors.BLUE}ℹ {text}{Colors.ENDC}")
-
-def install_dependencies():
-    """Install required Python packages"""
-    print_header("Installing Dependencies")
-    
-    required_packages = [
-        "streamlit", 
-        "pandas", 
-        "numpy", 
-        "requests"
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("options_fetch.log"),
+        logging.StreamHandler(sys.stdout)
     ]
-    
-    for package in required_packages:
-        print(f"Installing {package}...", end="")
-        try:
-            subprocess.check_call([
-                sys.executable, "-m", "pip", "install", package
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            print_success("Done")
-        except subprocess.CalledProcessError:
-            print_error("Failed")
-            print(f"Please install {package} manually: pip install {package}")
-    
-    print_success("All dependencies installed")
+)
 
-def configure_api_credentials():
-    """Configure Schwab API credentials"""
-    print_header("Configuring Schwab API Credentials")
-    
-    # Path to the scheduled fetch script
-    script_path = "scheduled_fetch.py"
-    
-    if not os.path.exists(script_path):
-        print_error(f"Cannot find {script_path}. Make sure you're in the correct directory.")
-        return False
-    
-    # Get API credentials from user
-    print_info("Enter your Schwab API credentials:")
-    api_key = input("API Key: ").strip()
-    api_secret = input("API Secret: ").strip()
-    
-    if not api_key or not api_secret:
-        print_warning("Empty credentials provided. Using mock data for now.")
-        use_mock = True
-    else:
-        use_mock = input("Use mock data instead of real API? (y/n, default: n): ").strip().lower() == 'y'
-    
-    # Read the current script
-    with open(script_path, 'r') as file:
-        lines = file.readlines()
-    
-    # Update the credentials and mock data flag
-    with open(script_path, 'w') as file:
-        for line in lines:
-            if "API_KEY = " in line:
-                file.write(f"API_KEY = \"{api_key}\"  # Replace with your actual API key\n")
-            elif "API_SECRET = " in line:
-                file.write(f"API_SECRET = \"{api_secret}\"  # Replace with your actual API secret\n")
-            elif "USE_MOCK_DATA = " in line:
-                file.write(f"USE_MOCK_DATA = {str(use_mock)}\n")
-            else:
-                file.write(line)
-    
-    print_success("API credentials configured")
-    return True
+# Constants
+DB_PATH = 'options_data.db'
+LOG_PATH = 'options_fetch.log'
 
+# Schwab API Credentials - REPLACE WITH YOUR ACTUAL CREDENTIALS
+API_KEY = "your_actual_api_key_here"
+API_SECRET = "your_actual_api_secret_here"
+
+# Schwab API Endpoints
+SCHWAB_AUTH_URL = "https://api.schwab.com/v1/oauth2/token"
+SCHWAB_OPTIONS_URL = "https://api.schwab.com/v1/markets/options/chains"
+
+# Set to False to use real Schwab API data
+USE_MOCK_DATA = False
+
+# Watchlist of symbols to track
+SYMBOLS = ["SMCI", "NVDL", "AAPL", "MSFT", "NVDA", "AMD", "GOOGL", "META", "TSLA"]
+
+# Setup database
 def setup_database():
-    """Set up the SQLite database"""
-    print_header("Setting Up Database")
+    """Create SQLite database and tables if they don't exist"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
     
-    # First check if streamlit app exists
-    app_path = "app.py"
-    if not os.path.exists(app_path):
-        print_error(f"Cannot find {app_path}. Make sure you're in the correct directory.")
-        return False
+    # Create tables
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS options_data (
+        id INTEGER PRIMARY KEY,
+        symbol TEXT,
+        price REAL,
+        exp_date TEXT,
+        strike REAL,
+        option_type TEXT,
+        bid REAL,
+        ask REAL,
+        volume INTEGER,
+        open_interest INTEGER,
+        implied_volatility REAL,
+        delta REAL,
+        timestamp DATETIME
+    )
+    ''')
     
-    # Execute the setup_database function from the main app
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS data_metadata (
+        id INTEGER PRIMARY KEY,
+        last_updated DATETIME,
+        source TEXT
+    )
+    ''')
+    
+    conn.commit()
+    conn.close()
+    logging.info("Database setup complete")
+
+# Save data to database
+def save_to_database(data, option_type):
+    """Save options data to SQLite database"""
+    if data.empty:
+        logging.warning(f"No {option_type} data to save to database")
+        return datetime.now()
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Clear old data of this type
+    cursor.execute("DELETE FROM options_data WHERE option_type = ?", (option_type,))
+    
+    # Insert new data
+    timestamp = datetime.now()
+    records_inserted = 0
+    
+    for _, row in data.iterrows():
+        cursor.execute('''
+        INSERT INTO options_data (
+            symbol, price, exp_date, strike, option_type, 
+            bid, ask, volume, open_interest, implied_volatility, 
+            delta, timestamp
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            row['symbol'], row['price'], row['exp_date'], row['strike'], option_type,
+            row.get('bid', 0), row.get('ask', 0), row.get('volume', 0), 
+            row.get('open_int', 0), row.get('iv_pct', 0), row.get('delta', 0), 
+            timestamp
+        ))
+        records_inserted += 1
+    
+    # Update metadata
+    cursor.execute("DELETE FROM data_metadata WHERE source = ?", (option_type,))
+    cursor.execute("INSERT INTO data_metadata (last_updated, source) VALUES (?, ?)", 
+                  (timestamp, option_type))
+    
+    conn.commit()
+    conn.close()
+    
+    logging.info(f"Saved {records_inserted} {option_type} records to database")
+    return timestamp
+
+# Get authentication token from Schwab API
+def get_schwab_auth_token():
+    """Get or refresh Schwab API authentication token"""
     try:
-        print_info("Creating database schema...")
-        # Create a temporary Python script to set up the database
-        with open("temp_db_setup.py", "w") as f:
-            f.write("""
-import sqlite3
-
-# Create database and tables
-conn = sqlite3.connect('options_data.db')
-cursor = conn.cursor()
-
-# Create tables
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS options_data (
-    id INTEGER PRIMARY KEY,
-    symbol TEXT,
-    price REAL,
-    exp_date TEXT,
-    strike REAL,
-    option_type TEXT,
-    bid REAL,
-    ask REAL,
-    volume INTEGER,
-    open_interest INTEGER,
-    implied_volatility REAL,
-    delta REAL,
-    timestamp DATETIME
-)
-''')
-
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS data_metadata (
-    id INTEGER PRIMARY KEY,
-    last_updated DATETIME,
-    source TEXT
-)
-''')
-
-conn.commit()
-conn.close()
-print("Database setup complete!")
-            """)
+        auth_data = {
+            "grant_type": "client_credentials",
+            "client_id": API_KEY,
+            "client_secret": API_SECRET
+        }
         
-        # Run the temporary script
-        subprocess.check_call([sys.executable, "temp_db_setup.py"])
-        os.remove("temp_db_setup.py")
+        response = requests.post(SCHWAB_AUTH_URL, data=auth_data)
         
-        print_success("Database setup complete")
-        return True
-    except Exception as e:
-        print_error(f"Error setting up database: {str(e)}")
-        return False
-
-def test_api_connection():
-    """Test the Schwab API connection"""
-    print_header("Testing API Connection")
-    
-    print_info("Running a test data fetch...")
-    try:
-        # Run the scheduled fetch script with a timeout
-        result = subprocess.run(
-            [sys.executable, "scheduled_fetch.py"],
-            capture_output=True, 
-            text=True,
-            timeout=60  # 60 second timeout
-        )
-        
-        if result.returncode == 0:
-            print_success("API test successful!")
-            print_info("Check the database to verify data was fetched.")
-            return True
+        if response.status_code == 200:
+            token_data = response.json()
+            access_token = token_data.get("access_token")
+            logging.info("Successfully obtained Schwab API access token")
+            return access_token
         else:
-            print_error("API test failed")
-            print_error(f"Error: {result.stderr}")
-            return False
-    except subprocess.TimeoutExpired:
-        print_error("API test timed out after 60 seconds")
-        return False
+            logging.error(f"Auth error: {response.status_code} - {response.text}")
+            return None
     except Exception as e:
-        print_error(f"Error testing API: {str(e)}")
-        return False
+        logging.error(f"Exception in auth token request: {str(e)}")
+        return None
 
-def setup_scheduler():
-    """Set up scheduled tasks based on the operating system"""
-    print_header("Setting Up Scheduler")
-    
-    system = platform.system()
-    
-    if system == "Linux" or system == "Darwin":  # Linux or Mac
-        print_info("For Linux/Mac systems, you'll need to set up a cron job.")
-        print_info("Example cron job to run at 9:31 AM ET on weekdays:")
-        script_path = os.path.abspath("scheduled_fetch.py")
-        print(f"31 9 * * 1-5 {sys.executable} {script_path}")
-        
-        setup_cron = input("Would you like to set up this cron job now? (y/n): ").strip().lower() == 'y'
-        
-        if setup_cron:
-            try:
-                # Create a temporary file with the cron job
-                with open("temp_cron", "w") as f:
-                    f.write(f"31 9 * * 1-5 {sys.executable} {script_path}\n")
-                
-                # Add the cron job
-                subprocess.run(["crontab", "-l"], stdout=open("existing_cron", "w"), stderr=subprocess.DEVNULL)
-                subprocess.run("cat existing_cron temp_cron > new_cron", shell=True)
-                subprocess.run(["crontab", "new_cron"])
-                
-                # Clean up temporary files
-                for file in ["temp_cron", "existing_cron", "new_cron"]:
-                    if os.path.exists(file):
-                        os.remove(file)
-                
-                print_success("Cron job set up successfully")
-            except Exception as e:
-                print_error(f"Error setting up cron job: {str(e)}")
-                print_info("Please set up the cron job manually using the example above.")
-    
-    elif system == "Windows":
-        print_info("For Windows systems, you'll need to set up a Task Scheduler task.")
-        print_info("Follow these steps:")
-        print("1. Open Task Scheduler")
-        print("2. Create a new Basic Task")
-        print("3. Set it to run daily at 9:31 AM")
-        print("4. Action: Start a program")
-        print(f"5. Program/script: {sys.executable}")
-        print(f"6. Add arguments: {os.path.abspath('scheduled_fetch.py')}")
-        
-        print_info("Would you like to open Task Scheduler now?")
-        open_scheduler = input("(y/n): ").strip().lower() == 'y'
-        
-        if open_scheduler:
-            try:
-                subprocess.Popen(["taskschd.msc"])
-                print_success("Task Scheduler opened")
-            except Exception as e:
-                print_error(f"Error opening Task Scheduler: {str(e)}")
-    
-    else:
-        print_warning(f"Unsupported operating system: {system}")
-        print_info("You'll need to set up a scheduled task manually to run scheduled_fetch.py daily.")
-
-def run_streamlit_app():
-    """Run the Streamlit app"""
-    print_header("Running Streamlit App")
-    
-    app_path = "app.py"
-    if not os.path.exists(app_path):
-        print_error(f"Cannot find {app_path}. Make sure you're in the correct directory.")
-        return False
-    
-    print_info("Starting Streamlit app...")
-    
+# Convert expiration date from Schwab format to app format
+def format_expiration_date(exp_date_str):
+    """Convert expiration date from API format to MM/DD/YY format"""
     try:
-        subprocess.Popen([sys.executable, "-m", "streamlit", "run", app_path])
-        print_success("Streamlit app started!")
-        print_info("Open your browser to view the app (usually at http://localhost:8501)")
-        return True
-    except Exception as e:
-        print_error(f"Error starting Streamlit app: {str(e)}")
-        print_info("Run the app manually with: streamlit run app.py")
-        return False
+        # Schwab may use ISO format (YYYY-MM-DD)
+        exp_date = datetime.strptime(exp_date_str, "%Y-%m-%d")
+        return exp_date.strftime("%m/%d/%y")
+    except Exception:
+        try:
+            # Try alternative format
+            exp_date = datetime.strptime(exp_date_str, "%Y%m%d")
+            return exp_date.strftime("%m/%d/%y")
+        except Exception:
+            # Return as is if parsing fails
+            return exp_date_str
 
+# Fetch options data from Schwab API
+def fetch_from_schwab_api(symbols, option_type="covered_call"):
+    """
+    Fetch options data from Schwab API
+    
+    Args:
+        symbols: List of stock symbols to fetch options for
+        option_type: Either "covered_call" or "cash_secured_put"
+        
+    Returns:
+        DataFrame with options data
+    """
+    if USE_MOCK_DATA:
+        logging.info("Using mock data (Schwab API integration disabled)")
+        return generate_mock_option_data(option_type=option_type, num_rows=50)
+    
+    logging.info(f"Fetching {option_type} data from Schwab API for {len(symbols)} symbols")
+    
+    # Get authentication token
+    access_token = get_schwab_auth_token()
+    if not access_token:
+        logging.error("Failed to get authentication token, using mock data as fallback")
+        return generate_mock_option_data(option_type=option_type, num_rows=50)
+    
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json"
+    }
+    
+    all_options_data = []
+    option_type_filter = "call" if option_type == "covered_call" else "put"
+    
+    # Loop through watchlist symbols
+    for symbol in symbols:
+        try:
+            # Set parameters for options chain request
+            params = {
+                "symbol": symbol,
+                "optionType": option_type_filter,
+                # Add other relevant parameters based on Schwab's API documentation
+                # For example: expiration range, strike range, etc.
+            }
+            
+            response = requests.get(SCHWAB_OPTIONS_URL, headers=headers, params=params)
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Get underlying stock price
+                underlying_price = 0
+                if "underlying" in data:
+                    underlying_price = float(data["underlying"].get("price", 0))
+                
+                # Process options data based on Schwab's response structure
+                # NOTE: Adjust this parsing logic based on Schwab's actual API response structure
+                if "options" in data:
+                    for option in data["options"]:
+                        # Extract expiration date and convert to our format
+                        exp_date = format_expiration_date(option.get("expirationDate", ""))
+                        strike = float(option.get("strikePrice", 0))
+                        
+                        # Calculate additional metrics
+                        # NOTE: Some of these might be directly available from Schwab API
+                        bid = float(option.get("bid", 0))
+                        ask = float(option.get("ask", 0))
+                        iv = float(option.get("impliedVolatility", 0)) * 100  # Convert to percentage
+                        delta = float(option.get("delta", 0))
+                        volume = int(option.get("volume", 0))
+                        open_interest = int(option.get("openInterest", 0))
+                        
+                        # Format the option data
+                        option_data = {
+                            "symbol": symbol,
+                            "price": underlying_price,
+                            "exp_date": exp_date,
+                            "strike": strike,
+                            "bid": bid,
+                            "ask": ask,
+                            "volume": volume,
+                            "open_int": open_interest,
+                            "iv_pct": iv,
+                            "delta": delta,
+                        }
+                        
+                        all_options_data.append(option_data)
+            else:
+                logging.error(f"API error for {symbol}: {response.status_code} - {response.text}")
+                
+        except Exception as e:
+            logging.error(f"Exception fetching data for {symbol}: {str(e)}")
+            logging.error(traceback.format_exc())
+    
+    # Convert to DataFrame
+    if not all_options_data:
+        logging.warning("No options data retrieved from API, using mock data as fallback")
+        return generate_mock_option_data(option_type=option_type, num_rows=50)
+    
+    df = pd.DataFrame(all_options_data)
+    
+    # Calculate strategy-specific metrics
+    if option_type == "covered_call":
+        # Calculate covered call metrics
+        df['moneyness'] = (df['strike'] - df['price']) / df['price'] * 100
+        df['net_profit'] = (df['bid'] * 100) - ((100 * df['price']) - (100 * df['strike']))
+        df['be_bid'] = df['price'] - df['bid']
+        df['be_pct'] = (df['be_bid'] - df['price']) / df['price'] * 100
+        df['otm_prob'] = (1 - df['delta']) * 100
+    else:  # cash_secured_put
+        # Calculate cash-secured put metrics
+        df['moneyness'] = (df['strike'] - df['price']) / df['price'] * 100
+        df['net_profit'] = (df['bid'] * 100) - ((100 * df['strike']) - (100 * df['price']))
+        df['be_bid'] = df['strike'] - df['bid']
+        df['be_pct'] = (df['be_bid'] - df['price']) / df['price'] * 100
+        df['otm_prob'] = df['delta'] * 100
+    
+    # Calculate days to expiry
+    df['days_to_expiry'] = df['exp_date'].apply(
+        lambda x: (datetime.strptime(x, "%m/%d/%y") - datetime.now()).days
+    )
+    df['days_to_expiry'] = df['days_to_expiry'].apply(lambda x: max(1, x))  # Ensure at least 1 day
+    
+    # Calculate returns
+    df['pnl_rtn'] = (df['bid'] / df['price']) * 100
+    df['ann_rtn'] = df['pnl_rtn'] * (365 / df['days_to_expiry'])
+    
+    logging.info(f"Retrieved {len(df)} {option_type} options from Schwab API")
+    return df
+
+# Generate mock option data for testing
+def generate_mock_option_data(strategy_type="covered_call", num_rows=20):
+    """Generate mock option data for testing"""
+    np.random.seed(int(time.time()))  # Use current time for some variety
+    
+    symbols = SYMBOLS
+    prices = {
+        "SMCI": 46.07,
+        "NVDL": 54.05,
+        "AAPL": 184.25,
+        "MSFT": 417.75,
+        "NVDA": 842.32,
+        "AMD": 174.49,
+        "GOOGL": 178.35,
+        "META": 515.28,
+        "TSLA": 176.75
+    }
+    
+    data = []
+    
+    for symbol in symbols:
+        stock_price = prices.get(symbol, 100.0)
+        
+        # Generate multiple expiration dates
+        for exp_days in [14, 30, 45, 60, 90]:
+            expiry_date = (datetime.now() + timedelta(days=exp_days)).strftime("%m/%d/%y")
+            
+            # Generate multiple strikes around the current price
+            if strategy_type == "covered_call":
+                # For covered calls, generate multiple strikes
+                strike_ranges = np.linspace(0.80, 0.99, 5)
+                for strike_pct in strike_ranges:
+                    strike = round(stock_price * strike_pct, 2)
+                    
+                    # Option price calculation
+                    moneyness = (strike - stock_price) / stock_price * 100
+                    bid_price = round((stock_price - strike) + (stock_price * 0.03), 2)
+                    bid_price = max(0.01, bid_price)  # Ensure positive prices
+                    ask_price = round(bid_price * 1.1, 2)
+                    
+                    # Additional metrics
+                    volume = np.random.randint(500, 5000)
+                    open_interest = np.random.randint(1000, 20000)
+                    iv_pct = np.random.uniform(200, 400)
+                    delta = 1 - (strike / stock_price) * 1.1
+                    delta = max(0.1, min(0.99, delta))
+                    
+                    data.append({
+                        "symbol": symbol,
+                        "price": stock_price,
+                        "exp_date": expiry_date,
+                        "strike": strike,
+                        "moneyness": moneyness,
+                        "bid": bid_price,
+                        "ask": ask_price,
+                        "volume": volume,
+                        "open_int": open_interest,
+                        "iv_pct": iv_pct,
+                        "delta": delta,
+                    })
+            else:  # Cash-Secured Puts
+                # For cash-secured puts, generate multiple strikes
+                strike_ranges = np.linspace(0.70, 0.95, 5)
+                for strike_pct in strike_ranges:
+                    strike = round(stock_price * strike_pct, 2)
+                    
+                    # Option price calculation
+                    moneyness = (strike - stock_price) / stock_price * 100
+                    bid_price = round(stock_price * 0.03 * (1 + abs(moneyness)/10), 2)
+                    bid_price = max(0.01, bid_price)  # Ensure positive prices
+                    ask_price = round(bid_price * 1.1, 2)
+                    
+                    # Additional metrics
+                    volume = np.random.randint(500, 5000)
+                    open_interest = np.random.randint(1000, 20000)
+                    iv_pct = np.random.uniform(200, 400)
+                    delta = (strike / stock_price) * 0.8
+                    delta = max(0.1, min(0.99, delta))
+                    
+                    data.append({
+                        "symbol": symbol,
+                        "price": stock_price,
+                        "exp_date": expiry_date,
+                        "strike": strike,
+                        "moneyness": moneyness,
+                        "bid": bid_price,
+                        "ask": ask_price,
+                        "volume": volume,
+                        "open_int": open_interest,
+                        "iv_pct": iv_pct,
+                        "delta": delta,
+                    })
+    
+    return pd.DataFrame(data)
+
+# Main function to run the data fetch
 def main():
-    """Main setup function"""
-    print_header("Options Scanner Setup")
-    
-    print(f"{Colors.BOLD}This script will help you set up the Options Scanner application.{Colors.ENDC}")
-    print("It will install dependencies, configure API credentials, set up the database,")
-    print("test the API connection, and optionally set up scheduled tasks.")
-    
-    proceed = input("\nDo you want to continue? (y/n): ").strip().lower() == 'y'
-    
-    if not proceed:
-        print_info("Setup cancelled.")
-        return
-    
-    # Steps to perform
-    steps = [
-        ("Installing dependencies", install_dependencies),
-        ("Configuring API credentials", configure_api_credentials),
-        ("Setting up database", setup_database),
-        ("Testing API connection", test_api_connection),
-        ("Setting up scheduler", setup_scheduler),
-        ("Running Streamlit app", run_streamlit_app)
-    ]
-    
-    # Execute each step
-    success = True
-    for step_name, step_func in steps:
-        print_header(step_name)
+    try:
+        logging.info("Starting Options Data Fetch")
         
-        # Ask if user wants to perform this step
-        do_step = input(f"Do you want to {step_name.lower()}? (y/n, default: y): ").strip().lower() != 'n'
+        # Setup database
+        setup_database()
         
-        if do_step:
-            result = step_func()
-            if not result and step_name != "Setting up scheduler" and step_name != "Running Streamlit app":
-                # Critical steps failed
-                success = False
-                print_error(f"{step_name} failed. Setup cannot continue.")
-                break
-        else:
-            print_info(f"Skipping {step_name.lower()}")
-    
-    if success:
-        print_header("Setup Complete")
-        print_success("The Options Scanner has been set up successfully!")
-        print_info("You can now use the app to scan for options opportunities.")
-    else:
-        print_header("Setup Incomplete")
-        print_warning("The Options Scanner setup is incomplete. Please resolve the issues above.")
+        # Fetch covered call data
+        logging.info("Fetching covered call data...")
+        covered_call_data = fetch_from_schwab_api(SYMBOLS, "covered_call")
+        cc_timestamp = save_to_database(covered_call_data, "covered_call")
+        
+        # Fetch cash-secured put data
+        logging.info("Fetching cash-secured put data...")
+        cash_secured_put_data = fetch_from_schwab_api(SYMBOLS, "cash_secured_put")
+        csp_timestamp = save_to_database(cash_secured_put_data, "cash_secured_put")
+        
+        logging.info(f"Data fetch completed successfully at {datetime.now()}")
+        logging.info(f"Covered Calls: {len(covered_call_data)} records")
+        logging.info(f"Cash-Secured Puts: {len(cash_secured_put_data)} records")
+        
+        return 0
+    except Exception as e:
+        logging.error(f"Error in data fetch: {str(e)}")
+        logging.error(traceback.format_exc())
+        return 1
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
