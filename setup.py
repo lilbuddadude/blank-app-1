@@ -115,7 +115,7 @@ def setup_database():
     print_header("Setting Up Database")
     
     # First check if streamlit app exists
-    app_path = "app.py"
+    app_path = "streamlit_app.py"
     if not os.path.exists(app_path):
         print_error(f"Cannot find {app_path}. Make sure you're in the correct directory.")
         return False
@@ -266,7 +266,7 @@ def run_streamlit_app():
     """Run the Streamlit app"""
     print_header("Running Streamlit App")
     
-    app_path = "app.py"
+    app_path = "streamlit_app.py"
     if not os.path.exists(app_path):
         print_error(f"Cannot find {app_path}. Make sure you're in the correct directory.")
         return False
