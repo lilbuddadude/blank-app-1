@@ -40,19 +40,19 @@ logging.basicConfig(
 DB_PATH = 'options_data.db'
 LOG_PATH = 'options_fetch.log'
 
-# Schwab API Credentials - REPLACE WITH YOUR ACTUAL CREDENTIALS
+# Schwab API Credentials
 API_KEY = "Vtbsc861GI48iT3JgAr8bp5Hvy5cVe7O"
 API_SECRET = "SvMJwXrepRDQBiXr"
 
 # Schwab API Endpoints
-SCHWAB_AUTH_URL = "https://api.schwab.com/v1/oauth2/token"
-SCHWAB_OPTIONS_URL = "https://api.schwab.com/v1/markets/options/chains"
+SCHWAB_AUTH_URL = "https://api.schwabapi.com/v1/oauth/token"
+SCHWAB_OPTIONS_URL = "https://api.schwabapi.com/v1/markets/options/chains"
 
-# Set to False to use real Schwab API data
-USE_MOCK_DATA = False
+# Set to True to use mock data instead of API data
+USE_MOCK_DATA = True
 
 # Watchlist of symbols to track
-SYMBOLS = ["SMCI", "NVDL", "AAPL", "MSFT", "NVDA", "AMD", "GOOGL", "META", "TSLA"]
+SYMBOLS = ["SMCI", "NVDA", "AAPL", "MSFT", "AMD", "GOOGL", "META", "TSLA"]
 
 # Setup database
 def setup_database():
@@ -136,19 +136,52 @@ def save_to_database(data, option_type):
 
 # Get authentication token from Schwab API
 def get_schwab_auth_token():
-    """Get or refresh Schwab API authentication token"""
+    """Get or refresh Schwab API authentication token using authorization code flow"""
     try:
-        auth_data = {
-            "grant_type": "client_credentials",
-            "client_id": API_KEY,
-            "client_secret": API_SECRET
-        }
+        # If you have a refresh token stored, you can use it to get a new access token
+        # Otherwise, for the first run, you'll need to manually get an authorization code
+
+        # Check if we have a refresh token
+        refresh_token = None
+        try:
+            if os.path.exists('refresh_token.txt'):
+                with open('refresh_token.txt', 'r') as f:
+                    refresh_token = f.read().strip()
+        except Exception as e:
+            logging.error(f"Error reading refresh token: {str(e)}")
         
-        response = requests.post(SCHWAB_AUTH_URL, data=auth_data)
+        if refresh_token:
+            # Use refresh token flow
+            token_data = {
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": API_KEY,
+                "client_secret": API_SECRET
+            }
+        else:
+            # For first-time setup, you need to manually get an authorization code
+            # This requires user interaction and can't be fully automated
+            auth_code = input("Enter the authorization code from Schwab: ")
+            
+            token_data = {
+                "grant_type": "authorization_code",
+                "code": auth_code,
+                "client_id": API_KEY,
+                "client_secret": API_SECRET,
+                "redirect_uri": "https://developer.schwab.com/oauth2-redirect.html"  # Must match your app's registered redirect URI
+            }
+        
+        response = requests.post(SCHWAB_AUTH_URL, data=token_data)
         
         if response.status_code == 200:
-            token_data = response.json()
-            access_token = token_data.get("access_token")
+            token_response = response.json()
+            access_token = token_response.get("access_token")
+            
+            # Save the refresh token for future use
+            if "refresh_token" in token_response:
+                with open('refresh_token.txt', 'w') as f:
+                    f.write(token_response["refresh_token"])
+            
             logging.info("Successfully obtained Schwab API access token")
             return access_token
         else:
@@ -310,10 +343,9 @@ def generate_mock_option_data(strategy_type="covered_call", num_rows=20):
     symbols = SYMBOLS
     prices = {
         "SMCI": 46.07,
-        "NVDL": 54.05,
+        "NVDA": 842.32,
         "AAPL": 184.25,
         "MSFT": 417.75,
-        "NVDA": 842.32,
         "AMD": 174.49,
         "GOOGL": 178.35,
         "META": 515.28,
