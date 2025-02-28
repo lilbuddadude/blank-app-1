@@ -44,11 +44,13 @@ LOG_PATH = 'options_fetch.log'
 API_KEY = "Vtbsc861GI48iT3JgAr8bp5Hvy5cVe7O"
 API_SECRET = "SvMJwXrepRDQBiXr"
 
+# Schwab API Endpoints
 SCHWAB_AUTH_URL = "https://api.schwabapi.com/v1/oauth/token"
 SCHWAB_AUTH_AUTHORIZE_URL = "https://api.schwabapi.com/v1/oauth/authorize"
+SCHWAB_OPTIONS_URL = "https://api.schwabapi.com/v1/markets/options/chains"
 
 # Set to True to use mock data instead of API data
-USE_MOCK_DATA = False
+USE_MOCK_DATA = True
 
 # Watchlist of symbols to track
 SYMBOLS = ["SMCI", "NVDA", "AAPL", "MSFT", "AMD", "GOOGL", "META", "TSLA"]
@@ -148,47 +150,6 @@ def get_schwab_auth_token():
             return access_token
         else:
             logging.error("Failed to get access token")
-            return None
-    except Exception as e:
-        logging.error(f"Exception in auth token request: {str(e)}")
-        return None
-        
-        if refresh_token:
-            # Use refresh token flow
-            token_data = {
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
-                "client_id": API_KEY,
-                "client_secret": API_SECRET
-            }
-        else:
-            # For first-time setup, you need to manually get an authorization code
-            # This requires user interaction and can't be fully automated
-            auth_code = input("Enter the authorization code from Schwab: ")
-            
-            token_data = {
-                "grant_type": "authorization_code",
-                "code": auth_code,
-                "client_id": API_KEY,
-                "client_secret": API_SECRET,
-                "redirect_uri": "https://developer.schwab.com/oauth2-redirect.html"  # Must match your app's registered redirect URI
-            }
-        
-        response = requests.post(SCHWAB_AUTH_URL, data=token_data)
-        
-        if response.status_code == 200:
-            token_response = response.json()
-            access_token = token_response.get("access_token")
-            
-            # Save the refresh token for future use
-            if "refresh_token" in token_response:
-                with open('refresh_token.txt', 'w') as f:
-                    f.write(token_response["refresh_token"])
-            
-            logging.info("Successfully obtained Schwab API access token")
-            return access_token
-        else:
-            logging.error(f"Auth error: {response.status_code} - {response.text}")
             return None
     except Exception as e:
         logging.error(f"Exception in auth token request: {str(e)}")
