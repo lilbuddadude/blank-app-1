@@ -50,7 +50,7 @@ SCHWAB_AUTH_AUTHORIZE_URL = "https://api.schwabapi.com/v1/oauth/authorize"
 SCHWAB_OPTIONS_URL = "https://api.schwabapi.com/v1/markets/options/chains"
 
 # Set to True to use mock data instead of API data
-USE_MOCK_DATA = True
+USE_MOCK_DATA = False
 
 # Watchlist of symbols to track
 SYMBOLS = ["SMCI", "NVDA", "AAPL", "MSFT", "AMD", "GOOGL", "META", "TSLA"]
