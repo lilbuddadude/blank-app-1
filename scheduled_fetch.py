@@ -135,19 +135,23 @@ def save_to_database(data, option_type):
 
 # Get authentication token from Schwab API
 def get_schwab_auth_token():
-    """Get or refresh Schwab API authentication token using authorization code flow"""
+    """Get authentication token using schwab_auth.py"""
     try:
-        # If you have a refresh token stored, you can use it to get a new access token
-        # Otherwise, for the first run, you'll need to manually get an authorization code
-
-        # Check if we have a refresh token
-        refresh_token = None
-        try:
-            if os.path.exists('refresh_token.txt'):
-                with open('refresh_token.txt', 'r') as f:
-                    refresh_token = f.read().strip()
-        except Exception as e:
-            logging.error(f"Error reading refresh token: {str(e)}")
+        # Import the auth module
+        import schwab_auth
+        
+        # Get the access token
+        access_token = schwab_auth.get_tokens()
+        
+        if access_token:
+            logging.info("Successfully obtained Schwab API access token")
+            return access_token
+        else:
+            logging.error("Failed to get access token")
+            return None
+    except Exception as e:
+        logging.error(f"Exception in auth token request: {str(e)}")
+        return None
         
         if refresh_token:
             # Use refresh token flow
